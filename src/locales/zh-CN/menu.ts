@@ -32,6 +32,7 @@ export default {
   'menu.billingAndUsage': '用量与计费',
   'menu.billingAndUsage.usage': '用量统计',
   'menu.billingAndUsage.billing': '计费',
+  'menu.billingAndUsage.requestLogs': '请求日志',
   'menu.404': '404',
   'menu.resources.workers': '节点',
   'menu.resources.gpus': 'GPU',
