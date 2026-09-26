@@ -360,6 +360,17 @@ const baseRoutes = [
         component: './usage/index'
       },
       {
+        // Per-request log with a live tail. Visible to everyone: members see
+        // their own requests, admins / Org owners their whole tenant's.
+        name: 'requestLogs',
+        path: '/usage/request-logs',
+        key: 'requestLogs',
+        icon: 'icon-logs',
+        selectedIcon: 'icon-logs',
+        defaultIcon: 'icon-logs',
+        component: './request-logs'
+      },
+      {
         name: 'billing',
         path: '/usage/billing',
         key: 'billing',

@@ -39,6 +39,7 @@ export default {
   'menu.billingAndUsage': 'Usage & Billing',
   'menu.billingAndUsage.usage': 'Usage',
   'menu.billingAndUsage.billing': 'Billing',
+  'menu.billingAndUsage.requestLogs': 'Request Logs',
   'menu.404': '404',
   'menu.resources.clusters': 'Clusters',
   'menu.resources.credentials': 'Cloud Credentials',
