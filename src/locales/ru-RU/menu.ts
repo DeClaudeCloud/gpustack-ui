@@ -30,6 +30,7 @@ export default {
   'menu.billingAndUsage': 'Использование и биллинг',
   'menu.billingAndUsage.usage': 'Использование',
   'menu.billingAndUsage.billing': 'Биллинг',
+  'menu.billingAndUsage.requestLogs': 'Журнал запросов',
   'menu.404': 'Ошибка 404',
   'menu.resources.workers': 'Воркеры',
   'menu.resources.gpus': 'GPUs',
