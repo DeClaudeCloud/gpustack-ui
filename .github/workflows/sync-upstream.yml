@@ -1,0 +1,124 @@
+# Fork-only automation. It lives in its own commit on top of the feature
+# branch and is not part of anything proposed upstream.
+#
+# Every day:
+#   1. keep upstream's own workflows disabled in this fork (its CI would run
+#      on every mirrored push),
+#   2. mirror upstream's main into this fork's main,
+#   3. rebase the feature branch onto it,
+#   4. check the feature (locales, lint, types), and only then force-push.
+#
+# Pushing upstream commits that touch .github/workflows needs a token with the
+# "workflows" permission, which the built-in GITHUB_TOKEN never has. Add a
+# fine-grained token (this repository; Contents and Workflows: read and write)
+# as the SYNC_TOKEN secret; without it the sync works until upstream next
+# changes a workflow file, and then fails with a message saying so.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: gpustack/gpustack-ui
+  UPSTREAM_BRANCH: main
+  FEATURE_BRANCH: feat/request-logs
+  SELF: .github/workflows/sync-upstream.yml
+
+jobs:
+  sync:
+    if: github.repository != 'gpustack/gpustack-ui'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Keep upstream workflows disabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow list --all --repo "$GITHUB_REPOSITORY" --json id,path,state \
+            --jq ".[] | select(.state == \"active\" and .path != \"$SELF\") | .id" |
+          while read -r id; do
+            gh workflow disable "$id" --repo "$GITHUB_REPOSITORY"
+            echo "disabled workflow $id"
+          done
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FEATURE_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Fetch upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          echo "BEFORE=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "UPSTREAM_SHA=$(git rev-parse "upstream/$UPSTREAM_BRANCH")" >> "$GITHUB_ENV"
+
+      - name: Mirror upstream main
+        run: |
+          if ! git push --force origin "refs/remotes/upstream/$UPSTREAM_BRANCH:refs/heads/$UPSTREAM_BRANCH" 2> push.err; then
+            cat push.err >&2
+            if grep -q "workflow" push.err; then
+              echo "::error::Upstream changed a workflow file; pushing it needs the SYNC_TOKEN secret (see the top of $SELF)."
+            fi
+            exit 1
+          fi
+          echo "Mirrored \`$UPSTREAM_BRANCH\` at \`${UPSTREAM_SHA:0:10}\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rebase feature branch
+        id: rebase
+        run: |
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "\`$FEATURE_BRANCH\` already sits on upstream \`$UPSTREAM_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git rebase "upstream/$UPSTREAM_BRANCH"; then
+            conflicts=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
+            git rebase --abort
+            {
+              echo "### Rebase conflict"
+              echo "\`$FEATURE_BRANCH\` no longer applies cleanly on upstream \`${UPSTREAM_SHA:0:10}\` and was left unchanged. Conflicting files:"
+              echo "$conflicts"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Rebase conflict; resolve it locally and force-push $FEATURE_BRANCH."
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.rebase.outputs.changed == 'true'
+        with:
+          node-version: 22
+
+      - name: Check the feature on the new base
+        if: steps.rebase.outputs.changed == 'true'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm run check:locales
+          npx eslint --max-warnings=0 src/pages/request-logs config/routes.ts
+          # The upstream tree has type errors of its own; only the feature's
+          # files have to be clean.
+          npx tsc --noEmit -p tsconfig.json > tsc.log || true
+          if grep -E "src/pages/request-logs|config/routes.ts" tsc.log; then
+            exit 1
+          fi
+
+      - name: Push feature branch
+        if: steps.rebase.outputs.changed == 'true'
+        run: |
+          git push --force-with-lease="$FEATURE_BRANCH:$BEFORE" origin "HEAD:refs/heads/$FEATURE_BRANCH"
+          echo "Rebased \`$FEATURE_BRANCH\` onto upstream \`${UPSTREAM_SHA:0:10}\` (was \`${BEFORE:0:10}\`)." >> "$GITHUB_STEP_SUMMARY"
