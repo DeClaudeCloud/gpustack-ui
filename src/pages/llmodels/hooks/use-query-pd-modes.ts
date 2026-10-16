@@ -180,9 +180,11 @@ export default function useQueryPDModes() {
   const buildOptions = (
     backend?: string,
     vendors?: string[],
-    verdicts?: Record<string, PDModeEligibility>
+    verdicts?: Record<string, PDModeEligibility>,
+    modes: PDMode[] = pdModes,
+    scope: 'cluster' | 'partition' = 'cluster'
   ): PDModeOption[] =>
-    pdModes.map((mode) => {
+    modes.map((mode) => {
       const targets = mode.backends || [];
       const backendOk =
         !targets.length || !backend || targets.includes(backend);
@@ -213,10 +215,7 @@ export default function useQueryPDModes() {
           {
             runtime: wanted.join(' / '),
             vendors: vendors!.join(' / '),
-            // This path only ever knows the cluster's accelerators; the
-            // partition wording exists for the server's verdict, which knows
-            // whether one was chosen.
-            scope: 'cluster'
+            scope
           }
         );
       }

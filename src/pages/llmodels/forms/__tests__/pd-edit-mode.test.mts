@@ -1,9 +1,11 @@
 import { atom } from 'jotai';
 import { JSDOM } from 'jsdom';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { after, mock, test } from 'node:test';
 import { act, createElement, forwardRef, Fragment, useContext } from 'react';
 import { createRoot } from 'react-dom/client';
+import type { PDModeResolution } from '../../config/types';
 
 const passChildren = ({ children }: any) =>
   createElement(Fragment, null, children);
@@ -15,6 +17,7 @@ const modes = [
   {
     name: 'vllm-nixl',
     backends: ['vLLM'],
+    gpu_filters: { vendor: ['nvidia'] },
     display_name: 'vLLM + NIXL',
     cache_services: [
       { provider: 'LMCache', roles: { prefill: {}, decode: {} } }
@@ -37,6 +40,7 @@ const modes = [
   {
     name: 'vllm-alternate',
     backends: ['vLLM'],
+    gpu_filters: { vendor: ['ascend'] },
     display_name: 'vLLM + Alternate',
     roles: {
       prefill: {
@@ -49,26 +53,123 @@ const modes = [
   {
     name: 'vllm-mooncake',
     backends: ['vLLM'],
+    gpu_filters: { vendor: ['nvidia'] },
     display_name: 'vLLM + Mooncake',
     cache_services: [
       { provider: 'Mooncake', roles: { prefill: {}, decode: {} } }
     ]
   },
-  { name: 'sglang-nixl', backends: ['SGLang'], display_name: 'SGLang + NIXL' },
+  {
+    name: 'sglang-mooncake',
+    backends: ['SGLang'],
+    gpu_filters: { vendor: ['nvidia'] },
+    display_name: 'SGLang + Mooncake'
+  },
   { name: 'custom', backends: [], display_name: 'Custom' }
 ];
-const defaultResolution = async ({ backend, cluster_id, vendor }: any) => ({
-  mode:
+const defaultResolution = async ({
+  backend,
+  cluster_id,
+  vendor
+}: any): Promise<PDModeResolution> => {
+  const recommendedMode =
     backend === 'SGLang'
-      ? 'sglang-nixl'
+      ? 'sglang-mooncake'
       : cluster_id === 2 || vendor === 'Ascend'
         ? 'vllm-alternate'
-        : 'vllm-nixl',
-  vendor: vendor ?? 'NVIDIA',
-  candidate_vendors: ['NVIDIA', 'Ascend'],
-  cluster_vendors: ['NVIDIA'],
-  options: []
-});
+        : 'vllm-nixl';
+  return {
+    mode: recommendedMode,
+    vendor: vendor ?? 'NVIDIA',
+    candidate_vendors: ['NVIDIA', 'Ascend'],
+    cluster_vendors: ['NVIDIA'],
+    options: modes.map((mode) => {
+      const eligible = !mode.backends.length || mode.backends.includes(backend);
+      return {
+        name: mode.name,
+        eligible,
+        recommended: mode.name === recommendedMode,
+        ...(eligible
+          ? {}
+          : {
+              ineligible_code: 'backend_mismatch',
+              ineligible_reason: `Requires ${mode.backends.join(' / ')} (current: ${backend}).`,
+              ineligible_params: { backend, targets: mode.backends.join(' / ') }
+            })
+      };
+    })
+  };
+};
+const partitionWarning = 'Choose an accelerator partition.';
+const partitionResolution = ({
+  backend = 'vLLM',
+  vendor,
+  vendors = ['nvidia', 'ascend']
+}: {
+  backend?: string;
+  vendor?: string;
+  vendors?: string[];
+} = {}): PDModeResolution => {
+  const candidates = vendor
+    ? [vendor]
+    : vendors.filter((item) => backend === 'vLLM' || item === 'nvidia');
+  const resolvedVendor = candidates.length === 1 ? candidates[0] : undefined;
+  const recommendedMode = !resolvedVendor
+    ? null
+    : backend === 'SGLang'
+      ? 'sglang-mooncake'
+      : resolvedVendor === 'ascend'
+        ? 'vllm-alternate'
+        : 'vllm-nixl';
+  return {
+    mode: recommendedMode,
+    vendor: resolvedVendor,
+    candidate_vendors: candidates,
+    cluster_vendors: vendors,
+    unresolved_reason: !resolvedVendor ? partitionWarning : undefined,
+    options: modes.map((mode) => {
+      const backendOk =
+        !mode.backends.length || mode.backends.includes(backend);
+      const vendorOk =
+        !mode.gpu_filters?.vendor.length ||
+        mode.gpu_filters.vendor.some((item) =>
+          (resolvedVendor ? [resolvedVendor] : vendors).includes(item)
+        );
+      return {
+        name: mode.name,
+        eligible: backendOk && vendorOk,
+        recommended: mode.name === recommendedMode,
+        ineligible_reason: !backendOk
+          ? `Requires ${mode.backends.join(' / ')}.`
+          : !vendorOk
+            ? `Requires ${mode.gpu_filters!.vendor.join(' / ')} accelerators; chosen partition has ${resolvedVendor}.`
+            : undefined
+      };
+    })
+  };
+};
+const deferredResolution = () => {
+  let resolve!: (value: PDModeResolution) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<PDModeResolution>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+};
+const workerListAtom = atom<any[]>([]);
+// tsx loads source modules through CommonJS, which owns a separate Jotai
+// default store from the test runner's ESM import.
+const { getDefaultStore } = createRequire(import.meta.url)('jotai');
+const mixedWorkers = [{ cluster_id: 1, vendors: ['nvidia', 'ascend'] }];
+const transportSelect = () =>
+  dom.window.document.querySelector<HTMLSelectElement>(
+    'select[aria-label="models.form.pd.mode"]'
+  )!;
+const vendorSelect = () =>
+  dom.window.document.querySelector<HTMLSelectElement>(
+    'select[aria-label="models.form.pd.vendor"]'
+  );
 let resolveMode = defaultResolution;
 const resolutionRequests = mock.fn((params: any) => resolveMode(params));
 mock.module('@gpustack/core-ui', {
@@ -96,7 +197,11 @@ mock.module('@gpustack/core-ui', {
         options?.map((option: any) =>
           createElement(
             'option',
-            { key: option.value, value: option.value },
+            {
+              key: option.value,
+              value: option.value,
+              disabled: option.disabled
+            },
             option.label
           )
         )
@@ -120,7 +225,7 @@ mock.module(new URL('../../../../config/index.ts', import.meta.url).href, {
   }
 });
 mock.module(new URL('../../../../atoms/models.ts', import.meta.url).href, {
-  namedExports: { workerListAtom: atom([]) }
+  namedExports: { workerListAtom }
 });
 mock.module(
   new URL('../../../cluster-management/config/index.ts', import.meta.url).href,
@@ -265,14 +370,17 @@ const renderForm = async ({
   vendor,
   action = 'edit',
   pd = true,
-  roles = savedRoles()
+  roles = savedRoles(),
+  workers = []
 }: {
   mode?: string;
   vendor?: string;
   action?: string;
   pd?: boolean;
   roles?: any[];
+  workers?: any[];
 } = {}) => {
+  getDefaultStore().set(workerListAtom, workers);
   const root = createRoot(dom.window.document.getElementById('root')!);
   const ref: any = { current: null };
   const submitted = mock.fn(clone);
@@ -335,6 +443,14 @@ const renderForm = async ({
       ref.current.form.setFieldValue('cluster_id', clusterId)
     );
   };
+  const enablePD = async () => {
+    await act(async () =>
+      (
+        dom.window.document.querySelector('[role="switch"]') as HTMLElement
+      ).click()
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 110)));
+  };
   return {
     root,
     ref,
@@ -342,7 +458,8 @@ const renderForm = async ({
     change,
     submit,
     changeBackend,
-    changeCluster
+    changeCluster,
+    enablePD
   };
 };
 
@@ -451,14 +568,12 @@ for (const action of ['edit', 'create']) {
 }
 
 test('enabling PD without a selected transport applies the recommendation and role injection', async () => {
-  const { root, ref } = await renderForm({ action: 'create', pd: false });
+  const { root, ref, enablePD } = await renderForm({
+    action: 'create',
+    pd: false
+  });
   try {
-    await act(async () =>
-      (
-        dom.window.document.querySelector('[role="switch"]') as HTMLElement
-      ).click()
-    );
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 110)));
+    await enablePD();
     assert.equal(
       ref.current.form.getFieldValue(['disaggregation', 'mode']),
       'vllm-nixl'
@@ -487,7 +602,7 @@ for (const input of ['backend', 'cluster', 'vendor']) {
       if (input === 'vendor') await change('models.form.pd.vendor', 'Ascend');
       assert.equal(
         ref.current.form.getFieldValue(['disaggregation', 'mode']),
-        input === 'backend' ? 'sglang-nixl' : 'vllm-alternate'
+        input === 'backend' ? 'sglang-mooncake' : 'vllm-alternate'
       );
       assert.ok(
         ref.current.form
@@ -495,6 +610,337 @@ for (const input of ['backend', 'cluster', 'vendor']) {
           .includes('--custom-prefill kept')
       );
     } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
+
+for (const action of ['create', 'edit']) {
+  test(`switching engines automatically selects an eligible transport without field errors (${action})`, async () => {
+    const { root, ref, changeBackend, enablePD } = await renderForm({
+      action,
+      pd: action === 'edit',
+      mode: 'vllm-nixl'
+    });
+    const modePath = ['disaggregation', 'mode'];
+    try {
+      if (action === 'create') await enablePD();
+      assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+      assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+      for (const [backend, expectedMode] of [
+        ['SGLang', 'sglang-mooncake'],
+        ['vLLM', 'vllm-nixl']
+      ]) {
+        await changeBackend(backend);
+        assert.equal(ref.current.form.getFieldValue(modePath), expectedMode);
+        // A later validateFields/submit would clear the stale error and hide
+        // the regression, so inspect the automatic validation result directly.
+        assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+      }
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+}
+
+test('a retained ineligible transport is rejected and its error clears when eligibility recovers', async () => {
+  const { root, ref, changeCluster } = await renderForm({ mode: 'vllm-nixl' });
+  const modePath = ['disaggregation', 'mode'];
+  const reason = 'This transport is unavailable on the selected accelerator.';
+  resolveMode = async (params: any) => {
+    const resolution = await defaultResolution(params);
+    return params.cluster_id === 2
+      ? {
+          ...resolution,
+          mode: null,
+          options: resolution.options.map((option) =>
+            option.name === 'vllm-nixl'
+              ? {
+                  ...option,
+                  eligible: false,
+                  ineligible_code: 'vendor_mismatch',
+                  ineligible_reason: reason
+                }
+              : option
+          )
+        }
+      : resolution;
+  };
+  try {
+    await changeCluster(2);
+    assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+    assert.deepEqual(ref.current.form.getFieldError(modePath), [reason]);
+    await act(async () => {
+      await assert.rejects(
+        ref.current.form.validateFields([modePath]),
+        (error: any) => {
+          assert.deepEqual(error.errorFields[0].errors, [reason]);
+          return true;
+        }
+      );
+    });
+    await changeCluster(1);
+    assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+    assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+  } finally {
+    resolveMode = defaultResolution;
+    await act(async () => root.unmount());
+  }
+});
+
+test('a late resolution for the previous engine cannot replace the current transport or eligibility', async () => {
+  const { root, ref, changeBackend } = await renderForm({ mode: 'vllm-nixl' });
+  const modePath = ['disaggregation', 'mode'];
+  let finishResolution!: (value: any) => void;
+  resolveMode = (params: any) =>
+    params.backend === 'SGLang'
+      ? new Promise((resolve) => {
+          finishResolution = resolve;
+        })
+      : defaultResolution(params);
+  try {
+    await changeBackend('SGLang');
+    assert.ok(finishResolution);
+    await changeBackend('vLLM');
+    assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+    assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+    await act(async () =>
+      finishResolution(await defaultResolution({ backend: 'SGLang' }))
+    );
+    assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+    assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+  } finally {
+    resolveMode = defaultResolution;
+    await act(async () => root.unmount());
+  }
+});
+
+test('a pending partition change disables transports for the other vendor and accepts the new recommendation', async () => {
+  resolveMode = async (params: any) => partitionResolution(params);
+  const { root, ref, change } = await renderForm({
+    mode: 'vllm-nixl',
+    workers: mixedWorkers
+  });
+  const pending = deferredResolution();
+  resolveMode = () => pending.promise;
+  const modePath = ['disaggregation', 'mode'];
+  try {
+    await change('models.form.pd.vendor', 'ascend');
+    const oldTransport = Array.from(transportSelect().options).find(
+      (option) => option.value === 'vllm-nixl'
+    );
+    assert.equal(oldTransport?.disabled, true);
+    assert.deepEqual(ref.current.form.getFieldError(modePath), [
+      'models.form.pd.mode.runtime.mismatch'
+    ]);
+    assert.ok(
+      !Array.from(transportSelect().options).some(
+        (option) => option.value === 'vllm-mooncake'
+      )
+    );
+    assert.ok(
+      !dom.window.document.body.textContent?.includes(partitionWarning)
+    );
+    await act(async () => {
+      await assert.rejects(ref.current.form.validateFields([modePath]));
+    });
+    await act(async () =>
+      pending.resolve(partitionResolution({ vendor: 'ascend' }))
+    );
+    assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-alternate');
+    assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+  } finally {
+    resolveMode = defaultResolution;
+    await act(async () => root.unmount());
+  }
+});
+
+test('an automatically selected vendor keeps the fresh authoritative eligibility verdicts', async () => {
+  resolveMode = async (params: any) => {
+    const resolution = partitionResolution({ ...params, vendors: ['nvidia'] });
+    return {
+      ...resolution,
+      options: resolution.options.map((option) =>
+        option.name === 'vllm-mooncake'
+          ? {
+              ...option,
+              eligible: false,
+              ineligible_reason:
+                'This recipe is unavailable according to the server.'
+            }
+          : option
+      )
+    };
+  };
+  const { root, ref } = await renderForm({
+    workers: [{ cluster_id: 1, vendors: ['nvidia'] }]
+  });
+  try {
+    assert.equal(
+      ref.current.form.getFieldValue(['disaggregation', 'vendor']),
+      'nvidia'
+    );
+    assert.equal(
+      ref.current.form.getFieldValue(['disaggregation', 'mode']),
+      'vllm-nixl'
+    );
+    assert.ok(
+      !Array.from(transportSelect().options).some(
+        (option) => option.value === 'vllm-mooncake'
+      ),
+      'the unrequested vendor written by resolution must not invalidate its verdicts'
+    );
+  } finally {
+    resolveMode = defaultResolution;
+    await act(async () => root.unmount());
+  }
+});
+
+test('a selected vendor absent from the new cluster cannot bypass its known accelerator inventory', async () => {
+  resolveMode = async (params: any) => partitionResolution(params);
+  const { root, changeCluster } = await renderForm({
+    mode: 'vllm-nixl',
+    vendor: 'nvidia',
+    workers: [
+      { cluster_id: 1, vendors: ['nvidia'] },
+      { cluster_id: 2, vendors: ['ascend'] }
+    ]
+  });
+  const pending = deferredResolution();
+  resolveMode = () => pending.promise;
+  try {
+    await changeCluster(2);
+    assert.equal(
+      Array.from(transportSelect().options).find(
+        (option) => option.value === 'vllm-nixl'
+      )?.disabled,
+      true
+    );
+    await act(async () =>
+      pending.resolve({
+        ...partitionResolution({ vendor: 'ascend', vendors: ['ascend'] }),
+        mode: null,
+        vendor: null,
+        candidate_vendors: [],
+        unresolved_reason: 'The selected vendor is not present in this cluster.'
+      })
+    );
+  } finally {
+    resolveMode = defaultResolution;
+    await act(async () => root.unmount());
+  }
+});
+
+test('choosing Custom while a partition resolves keeps the vendor picker usable and ignores the late answer', async () => {
+  resolveMode = async (params: any) => partitionResolution(params);
+  const { root, ref, change } = await renderForm({
+    mode: 'vllm-nixl',
+    workers: mixedWorkers
+  });
+  const pending = deferredResolution();
+  resolveMode = () => pending.promise;
+  const modePath = ['disaggregation', 'mode'];
+  try {
+    await change('models.form.pd.vendor', 'ascend');
+    assert.ok(vendorSelect());
+    await change('models.form.pd.mode', 'custom');
+    await act(async () =>
+      pending.resolve(partitionResolution({ vendor: 'ascend' }))
+    );
+    assert.equal(ref.current.form.getFieldValue(modePath), 'custom');
+    assert.deepEqual(ref.current.form.getFieldError(modePath), []);
+    assert.ok(
+      vendorSelect(),
+      'canceling a resolve must not trap the chosen partition'
+    );
+    resolveMode = async (params: any) => partitionResolution(params);
+    await change('models.form.pd.vendor', 'nvidia');
+    assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+  } finally {
+    resolveMode = defaultResolution;
+    await act(async () => root.unmount());
+  }
+});
+
+for (const outcome of ['unresolved', 'failure']) {
+  test(`a vendor resolution ${outcome} revalidates the retained transport for the selected partition`, async () => {
+    resolveMode = async (params: any) => partitionResolution(params);
+    const { root, ref, change } = await renderForm({
+      mode: 'vllm-nixl',
+      workers: mixedWorkers
+    });
+    const pending = deferredResolution();
+    resolveMode = () => pending.promise;
+    const modePath = ['disaggregation', 'mode'];
+    try {
+      await change('models.form.pd.vendor', 'ascend');
+      await act(async () => {
+        if (outcome === 'failure') {
+          pending.reject(new Error('Resolver unavailable'));
+        } else {
+          const resolution = partitionResolution({ vendor: 'ascend' });
+          pending.resolve({
+            ...resolution,
+            mode: null,
+            unresolved_reason: 'No recipe is preferred for this partition.',
+            options: resolution.options.map((option) => ({
+              ...option,
+              recommended: false
+            }))
+          });
+        }
+      });
+      assert.equal(ref.current.form.getFieldValue(modePath), 'vllm-nixl');
+      assert.ok(
+        ref.current.form.getFieldError(modePath).length > 0,
+        'automatic resolution completion must revalidate a retained incompatible mode'
+      );
+      if (outcome === 'unresolved') {
+        assert.deepEqual(ref.current.form.getFieldError(modePath), [
+          'Requires nvidia accelerators; chosen partition has ascend.'
+        ]);
+      }
+    } finally {
+      resolveMode = defaultResolution;
+      await act(async () => root.unmount());
+    }
+  });
+}
+
+for (const input of ['backend', 'cluster']) {
+  test(`changing ${input} hides the previous resolution warning and vendor choices while resolving`, async () => {
+    resolveMode = async (params: any) => partitionResolution(params);
+    const { root, changeBackend, changeCluster } = await renderForm({
+      mode: 'custom',
+      workers: mixedWorkers
+    });
+    const pending = deferredResolution();
+    resolveMode = () => pending.promise;
+    try {
+      assert.ok(vendorSelect());
+      assert.ok(
+        dom.window.document.body.textContent?.includes(partitionWarning)
+      );
+      if (input === 'backend') await changeBackend('SGLang');
+      else await changeCluster(2);
+      assert.equal(vendorSelect(), null);
+      assert.ok(
+        !dom.window.document.body.textContent?.includes(partitionWarning)
+      );
+      await act(async () =>
+        pending.resolve(
+          partitionResolution({
+            backend: input === 'backend' ? 'SGLang' : 'vLLM',
+            vendors: ['nvidia']
+          })
+        )
+      );
+      assert.equal(vendorSelect(), null);
+      assert.ok(
+        !dom.window.document.body.textContent?.includes(partitionWarning)
+      );
+    } finally {
+      resolveMode = defaultResolution;
       await act(async () => root.unmount());
     }
   });
