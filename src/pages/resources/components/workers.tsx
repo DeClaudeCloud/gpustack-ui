@@ -13,7 +13,6 @@ import useAddWorker from '@/pages/cluster-management/hooks/use-add-worker';
 import { useQueryClusterList } from '@/pages/cluster-management/services/use-query-cluster-list';
 import useNoResourceResult from '@/pages/llmodels/hooks/use-no-resource-result';
 import useGranfanaLink from '@/pages/resources/hooks/use-grafana-link';
-import { EnvironmentOutlined } from '@ant-design/icons';
 import {
   DeleteModal,
   FilterBar,
@@ -22,15 +21,16 @@ import {
 } from '@gpustack/core-ui';
 import { useIntl } from '@umijs/max';
 import { useMemoizedFn } from 'ahooks';
-import { Button, message } from 'antd';
+import { message } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   WORKERS_API,
   deleteWorker,
   queryWorkersList,
-  updateWorker
+  updateWorker,
+  updateWorkerLabels
 } from '../apis';
-import { ListItem } from '../config/types';
+import { ListItem, WorkerLabelsFormData } from '../config/types';
 import useWorkerColumns from '../hooks/use-worker-columns';
 import useWorkerMaintenance from '../hooks/use-worker-maintenance';
 import UpdateLabels from './update-labels';
@@ -85,8 +85,7 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
 
   const intl = useIntl();
   // Non-empty means the labels modal is writing to the selection rather than
-  // to one row. Held as ids and not rows so a background refresh cannot leave
-  // the modal pointed at stale copies.
+  // to one row. Send every selected id, independent of the visible page.
   const [batchLabelTargets, setBatchLabelTargets] = useState<number[]>([]);
   const [updateLabelsData, setUpdateLabelsData] = useState<{
     open: boolean;
@@ -193,32 +192,17 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
     }
   };
 
-  const handleUpdateLabelsOk = async (values: Record<string, any>) => {
+  const handleUpdateLabelsOk = async (values: WorkerLabelsFormData) => {
     try {
       if (batchLabelTargets.length) {
-        // The endpoint is a per-worker PUT taking the whole row, so a batch is
-        // N writes. Sent with `allSettled` and reported by count: labelling
-        // thirty workers and failing on one must not roll back the
-        // twenty-nine that worked, and must not claim success either.
-        const rows = (dataSource.dataList || []).filter((item: ListItem) =>
-          batchLabelTargets.includes(item.id)
-        );
-        const results = await Promise.allSettled(
-          rows.map((row: ListItem) =>
-            updateWorker(row.id, { ...row, labels: values.labels })
-          )
-        );
-        const failed = results.filter((r) => r.status === 'rejected').length;
-        if (failed) {
-          message.warning(
-            intl.formatMessage(
-              { id: 'resources.worker.setLabels.partial' },
-              { done: results.length - failed, failed }
-            )
-          );
-        } else {
-          message.success(intl.formatMessage({ id: 'common.message.success' }));
+        if (!Object.keys(values.labels).length) {
+          return;
         }
+        await updateWorkerLabels({
+          worker_ids: batchLabelTargets,
+          labels: values.labels
+        });
+        message.success(intl.formatMessage({ id: 'common.message.success' }));
         rowSelection?.clearSelections?.();
       } else {
         await updateWorker(updateLabelsData.data.id, {
@@ -230,8 +214,8 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
       fetchData();
       setBatchLabelTargets([]);
       setUpdateLabelsData({ open: false, data: {} as ListItem });
-    } catch (error) {
-      console.log('error', error);
+    } catch {
+      // The global request handler reports the error; keep the form for retry.
     }
   };
 
@@ -264,6 +248,7 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
     if (!ids.length) {
       return;
     }
+    setSetLocationOpen(false);
     setBatchLabelTargets(ids);
     setUpdateLabelsData({
       open: true,
@@ -318,27 +303,23 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
     (rowSelection?.selectedRowKeys || []).includes(item.id)
   );
 
-  const setLocationAction = (
+  const renderBatchActions = (actions: React.ReactElement) => (
     <SetLocationForWorkers
       open={setLocationOpen}
-      onOpenChange={setSetLocationOpen}
+      onOpenChange={(nextOpen) => {
+        // Only the location action opens this popover. Other batch controls
+        // share its anchor and must not open it when clicked.
+        if (!nextOpen) {
+          setSetLocationOpen(false);
+        }
+      }}
       workers={selectedWorkers}
       onDone={() => {
         fetchData();
         getTopologies(Object.keys(topologies).map(Number));
       }}
     >
-      <Button
-        icon={<EnvironmentOutlined />}
-        disabled={!rowSelection?.selectedRowKeys?.length}
-      >
-        <span>
-          {intl.formatMessage({ id: 'resources.worker.setLocation' })}
-          {rowSelection?.selectedRowKeys?.length > 0 && (
-            <span>({rowSelection?.selectedRowKeys?.length})</span>
-          )}
-        </span>
-      </Button>
+      <span>{actions}</span>
     </SetLocationForWorkers>
   );
 
@@ -421,9 +402,15 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
               <></>
             ) : (
               <WorkerRightActions
-                handleDeleteByBatch={handleDeleteBatch}
+                handleDeleteByBatch={() => {
+                  setSetLocationOpen(false);
+                  handleDeleteBatch();
+                }}
+                handleSetLocationByBatch={() => {
+                  setSetLocationOpen((open) => !open);
+                }}
                 handleUpdateLabelsByBatch={handleUpdateLabelsByBatch}
-                SetLocationAction={setLocationAction}
+                renderBatchActions={renderBatchActions}
                 handleClickPrimary={handleOnAddWorker}
                 rowSelection={rowSelection}
                 MonitorButton={ActionButton()}
