@@ -5,8 +5,10 @@
 #   1. keep upstream's own workflows disabled in this fork (its CI would run
 #      on every mirrored push),
 #   2. mirror upstream's main into this fork's main,
-#   3. rebase the feature branch onto it,
-#   4. check the feature (locales, lint, types), and only then force-push.
+#   3. merge it into the feature branch, so the branch only ever moves
+#      forward and a clone can always `git pull` it (the backend fork syncs
+#      the same way),
+#   4. check the feature (locales, lint, types), and only then push.
 #
 # Pushing upstream commits that touch .github/workflows needs a token with the
 # "workflows" permission, which the built-in GITHUB_TOKEN never has. Add a
@@ -77,34 +79,34 @@ jobs:
           fi
           echo "Mirrored \`$UPSTREAM_BRANCH\` at \`${UPSTREAM_SHA:0:10}\`." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Rebase feature branch
-        id: rebase
+      - name: Merge upstream
+        id: sync
         run: |
           if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
-            echo "\`$FEATURE_BRANCH\` already sits on upstream \`$UPSTREAM_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "\`$FEATURE_BRANCH\` already includes upstream \`$UPSTREAM_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! git rebase "upstream/$UPSTREAM_BRANCH"; then
+          if ! git merge --no-edit "upstream/$UPSTREAM_BRANCH"; then
             conflicts=$(git diff --name-only --diff-filter=U | sed 's/^/- /')
-            git rebase --abort
+            git merge --abort
             {
-              echo "### Rebase conflict"
-              echo "\`$FEATURE_BRANCH\` no longer applies cleanly on upstream \`${UPSTREAM_SHA:0:10}\` and was left unchanged. Conflicting files:"
+              echo "### Merge conflict"
+              echo "\`$FEATURE_BRANCH\` could not merge upstream \`${UPSTREAM_SHA:0:10}\` and was left unchanged. Conflicting files:"
               echo "$conflicts"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::Rebase conflict; resolve it locally and force-push $FEATURE_BRANCH."
+            echo "::error::Merge conflict; resolve it locally and push $FEATURE_BRANCH."
             exit 1
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
-        if: steps.rebase.outputs.changed == 'true'
+        if: steps.sync.outputs.changed == 'true'
         with:
           node-version: 22
 
       - name: Check the feature on the new base
-        if: steps.rebase.outputs.changed == 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: |
           corepack enable
           pnpm install --frozen-lockfile
@@ -118,7 +120,7 @@ jobs:
           fi
 
       - name: Push feature branch
-        if: steps.rebase.outputs.changed == 'true'
+        if: steps.sync.outputs.changed == 'true'
         run: |
-          git push --force-with-lease="$FEATURE_BRANCH:$BEFORE" origin "HEAD:refs/heads/$FEATURE_BRANCH"
-          echo "Rebased \`$FEATURE_BRANCH\` onto upstream \`${UPSTREAM_SHA:0:10}\` (was \`${BEFORE:0:10}\`)." >> "$GITHUB_STEP_SUMMARY"
+          git push origin "HEAD:refs/heads/$FEATURE_BRANCH"
+          echo "Merged upstream \`${UPSTREAM_SHA:0:10}\` into \`$FEATURE_BRANCH\` (was \`${BEFORE:0:10}\`)." >> "$GITHUB_STEP_SUMMARY"
