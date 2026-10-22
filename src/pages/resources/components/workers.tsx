@@ -3,8 +3,6 @@ import useTableFetch from '@/hooks/use-table-fetch';
 import PageBox from '@/pages/_components/page-box';
 import { queryClusterTopology } from '@/pages/cluster-management/apis';
 import { DockerStepsFromWorker } from '@/pages/cluster-management/components/add-worker/config';
-import TopologyDrawer from '@/pages/cluster-management/components/topology';
-import { SetLocationForWorkers } from '@/pages/cluster-management/components/topology/set-location';
 import {
   ClusterListItem,
   TopologyView
@@ -122,11 +120,6 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
   const [topologies, setTopologies] = useState<Record<number, TopologyView>>(
     {}
   );
-  const [topologyTarget, setTopologyTarget] = useState<{
-    clusterId: number;
-    workerId?: number;
-  } | null>(null);
-  const [setLocationOpen, setSetLocationOpen] = useState(false);
 
   const getTopologies = async (clusterIds: number[]) => {
     const pairs = await Promise.all(
@@ -248,7 +241,6 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
     if (!ids.length) {
       return;
     }
-    setSetLocationOpen(false);
     setBatchLabelTargets(ids);
     setUpdateLabelsData({
       open: true,
@@ -294,34 +286,7 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
     if (val === 'metrics') {
       goToGrafana(record);
     }
-    if (val === 'topology') {
-      setTopologyTarget({ clusterId: record.cluster_id, workerId: record.id });
-    }
   });
-
-  const selectedWorkers = (dataSource.dataList || []).filter((item: ListItem) =>
-    (rowSelection?.selectedRowKeys || []).includes(item.id)
-  );
-
-  const renderBatchActions = (actions: React.ReactElement) => (
-    <SetLocationForWorkers
-      open={setLocationOpen}
-      onOpenChange={(nextOpen) => {
-        // Only the location action opens this popover. Other batch controls
-        // share its anchor and must not open it when clicked.
-        if (!nextOpen) {
-          setSetLocationOpen(false);
-        }
-      }}
-      workers={selectedWorkers}
-      onDone={() => {
-        fetchData();
-        getTopologies(Object.keys(topologies).map(Number));
-      }}
-    >
-      <span>{actions}</span>
-    </SetLocationForWorkers>
-  );
 
   const handleOnAddWorker = () => {
     const targetCluster = checkDefaultCluster(clusterData.list);
@@ -402,15 +367,8 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
               <></>
             ) : (
               <WorkerRightActions
-                handleDeleteByBatch={() => {
-                  setSetLocationOpen(false);
-                  handleDeleteBatch();
-                }}
-                handleSetLocationByBatch={() => {
-                  setSetLocationOpen((open) => !open);
-                }}
+                handleDeleteByBatch={handleDeleteBatch}
                 handleUpdateLabelsByBatch={handleUpdateLabelsByBatch}
-                renderBatchActions={renderBatchActions}
                 handleClickPrimary={handleOnAddWorker}
                 rowSelection={rowSelection}
                 MonitorButton={ActionButton()}
@@ -472,20 +430,6 @@ const Workers: React.FC<WorkersProps> = ({ clusterId, source }) => {
           open={workerSSHStatus.open}
           currentData={workerSSHStatus.currentData}
           onClose={() => setWorkerSSHStatus({ currentData: null, open: false })}
-        />
-        <TopologyDrawer
-          open={!!topologyTarget}
-          clusterId={topologyTarget?.clusterId}
-          clusterName={
-            topologyTarget ? clusterData.data[topologyTarget.clusterId] : null
-          }
-          highlightWorkerId={topologyTarget?.workerId}
-          onClose={() => {
-            setTopologyTarget(null);
-            // Values may have changed in the drawer; the list's own polling
-            // is manual here.
-            fetchData();
-          }}
         />
         {MaintenanceModal}
         {AddWorkerModal}

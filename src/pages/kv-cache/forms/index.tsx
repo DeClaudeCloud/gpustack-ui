@@ -1,6 +1,8 @@
 import { PageAction } from '@/config';
 import { PageActionType } from '@/config/types';
+import { ClusterListItem } from '@/pages/cluster-management/config/types';
 import { useQueryClusterList } from '@/pages/cluster-management/services/use-query-cluster-list';
+import { WorkerStatusMap } from '@/pages/resources/config';
 import { ListItem as WorkerListItem } from '@/pages/resources/config/types';
 import { useQueryWorkerList } from '@/pages/resources/services/use-query-worker-list';
 import { localize } from '@/utils/localize';
@@ -36,6 +38,7 @@ import {
 } from '../config/types';
 import useCacheProviders from '../hooks/use-cache-providers';
 import usePlacementCheck, {
+  checkWorkerReadiness,
   ResourceCheckStatus
 } from '../hooks/use-placement-check';
 import ComponentParameters from './component-parameters';
@@ -56,6 +59,9 @@ import {
 } from './utils';
 
 export type { ResourceCheckStatus };
+
+const isGpuServiceCluster = (cluster: ClusterListItem) =>
+  Boolean(cluster.k8s_options?.gpuInstanceOptions);
 
 interface ServiceFormProps {
   ref?: any;
@@ -92,15 +98,31 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
   const { clusterList: clusterOptions, fetchClusterList } =
     useQueryClusterList();
   const { fetchData: fetchWorkerList } = useQueryWorkerList();
-  const [workers, setWorkers] = useState<WorkerListItem[]>([]);
-  const [workersLoading, setWorkersLoading] = useState(true);
+  const [workerRead, setWorkerRead] = useState<{
+    clusterId?: number;
+    status: 'loading' | 'loaded' | 'error';
+    workers: WorkerListItem[];
+  }>({ status: 'loading', workers: [] });
+  const { workers } = workerRead;
+  const workersLoading = workerRead.status === 'loading';
+  // Offline hardware cannot choose a new service's runtime or defaults.
+  // Keep the full list for options and the existing edit behavior.
+  const hardwareWorkers = useMemo(
+    () =>
+      action === PageAction.CREATE
+        ? workers.filter((worker) => worker.state === WorkerStatusMap.ready)
+        : workers,
+    [workers, action]
+  );
   const workerOptions = useMemo(
     () =>
       workers.map((item) => ({
         label: item.name,
-        value: item.id
+        value: item.id,
+        disabled:
+          action === PageAction.CREATE && item.state !== WorkerStatusMap.ready
       })),
-    [workers]
+    [workers, action]
   );
   const workerLabelOptions = useMemo(
     () => buildWorkerLabelOptions(workers),
@@ -161,12 +183,51 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
         )
       )
   );
+  const createWorkerError = useMemoizedFn((clusterId?: number) => {
+    if (action !== PageAction.CREATE || !clusterId) {
+      return undefined;
+    }
+    if (workerRead.clusterId !== clusterId || workersLoading) {
+      return intl.formatMessage({ id: 'kvCache.check.workersLoading' });
+    }
+    if (workerRead.status === 'error') {
+      return intl.formatMessage({ id: 'kvCache.check.workersUnavailable' });
+    }
+    return checkWorkerReadiness(
+      {
+        workers,
+        workerId: form.getFieldValue('worker_id'),
+        workerSelector: form.getFieldValue('worker_selector')
+      },
+      intl
+    )?.message;
+  });
   const checkCurrentPlacement = useMemoizedFn(() => {
     const values = form.getFieldsValue(true) as FormData;
     lastPlacementConfig.current = placementConfig(
       values,
       getProvider(values.provider_name)
     );
+    if (action === PageAction.CREATE) {
+      if (
+        !values.cluster_id ||
+        workerRead.clusterId !== values.cluster_id ||
+        workersLoading
+      ) {
+        resetPlacementCheck();
+        onCheckStatusChange?.({ show: false, message: '' });
+        return;
+      }
+      if (workerRead.status === 'error') {
+        resetPlacementCheck();
+        onCheckStatusChange?.({
+          show: true,
+          type: 'danger',
+          message: createWorkerError(values.cluster_id)!
+        });
+        return;
+      }
+    }
     if (action === PageAction.EDIT) {
       // Late data cannot opt an unchanged edit into checks or restore a
       // warning after the user has reverted the relevant fields.
@@ -228,6 +289,10 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
   // for user edits alone — which is what a hardware-decided default must
   // yield to.
   const handleFormValuesChange = (changed: any, allValues: FormData) => {
+    if (action === PageAction.CREATE && 'cluster_id' in changed) {
+      resetPlacementCheck();
+      onCheckStatusChange?.({ show: false, message: '' });
+    }
     Object.keys(changed?.config?.fields || {}).forEach((name) =>
       pinnedFields.current.add(name)
     );
@@ -246,8 +311,8 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
   // The support-matrix keys this cluster's workers are read against; the
   // version list is the only thing that needs them as a set.
   const clusterFrameworks = useMemo(
-    () => clusterFrameworksOf(workers),
-    [workers]
+    () => clusterFrameworksOf(hardwareWorkers),
+    [hardwareWorkers]
   );
 
   const versionOptions = useMemo(() => {
@@ -347,12 +412,12 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
   // choice that only fails once an engine attaches.
   const clusterFramework = useMemo(() => {
     const frameworks = new Set(
-      workers
+      hardwareWorkers
         .map((worker) => worker.status?.gpu_devices?.[0]?.type)
         .filter(Boolean) as string[]
     );
     return frameworks.size === 1 ? [...frameworks][0] : undefined;
-  }, [workers]);
+  }, [hardwareWorkers]);
 
   const fieldDefault = useCallback(
     (field: CacheProviderField) =>
@@ -388,7 +453,7 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
     versionPinned.current = false;
     form.setFieldValue(
       'provider_version',
-      pickInitialVersion(provider, workers)
+      pickInitialVersion(provider, hardwareWorkers)
     );
     // config.image only accompanies the reserved "custom" version, and
     // the version just reset to the provider default
@@ -571,6 +636,26 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
     />
   );
 
+  const handleFinish = async (values: FormData) => {
+    const error = createWorkerError(values.cluster_id);
+    if (error) {
+      // Worker availability belongs to the placement alert, not field
+      // validation. Check again here so loading or dismissed alerts cannot
+      // allow a service with no Ready target through.
+      onCheckStatusChange?.({
+        show: true,
+        type:
+          workerRead.clusterId !== values.cluster_id || workersLoading
+            ? 'transition'
+            : 'danger',
+        message: error
+      });
+      onFinishFailed?.({ values, errorFields: [], outOfDate: false });
+      return;
+    }
+    await onFinish(values);
+  };
+
   useImperativeHandle(ref, () => ({
     form,
     submit: () => {
@@ -691,9 +776,12 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
     ) {
       return;
     }
+    const availableClusters = clusterOptions.filter(
+      (item) => !isGpuServiceCluster(item)
+    );
     const initialCluster =
-      clusterOptions.find((item) => item.is_default) ??
-      (clusterOptions.length === 1 ? clusterOptions[0] : undefined);
+      availableClusters.find((item) => item.is_default) ??
+      (availableClusters.length === 1 ? availableClusters[0] : undefined);
     if (initialCluster) {
       form.setFieldValue('cluster_id', initialCluster.value);
     }
@@ -711,11 +799,12 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
     // label-selector autocomplete
     const fetchWorkers = async () => {
       if (!clusterId) {
-        setWorkers([]);
-        setWorkersLoading(false);
+        setWorkerRead({ status: 'loaded', workers: [] });
+        schedulePlacementCheck();
         return;
       }
-      setWorkersLoading(true);
+      setWorkerRead({ clusterId, status: 'loading', workers: [] });
+      schedulePlacementCheck();
       try {
         const items = (await fetchWorkerList({
           cluster_id: clusterId,
@@ -726,9 +815,11 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
         if (!active || form.getFieldValue('cluster_id') !== clusterId) {
           return;
         }
-        setWorkers(items || []);
-        setWorkersLoading(false);
-        reseedVersionFor(items || []);
+        const readyWorkers = (items || []).filter(
+          (worker) => worker.state === WorkerStatusMap.ready
+        );
+        setWorkerRead({ clusterId, status: 'loaded', workers: items || [] });
+        reseedVersionFor(readyWorkers);
         // nothing to seed where the form offers no Worker select
         if (isPerNode || hasComponents) {
           schedulePlacementCheck();
@@ -737,17 +828,16 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
         // seed an empty selection with the least-loaded worker
         if (
           action === PageAction.CREATE &&
-          items?.length &&
+          readyWorkers.length &&
           form.getFieldValue('worker_id') == null
         ) {
-          form.setFieldValue('worker_id', pickDefaultWorker(items).id);
+          form.setFieldValue('worker_id', pickDefaultWorker(readyWorkers).id);
         }
         schedulePlacementCheck();
       } catch (error) {
         // Only the still-active effect may clear workers on failure.
         if (active && form.getFieldValue('cluster_id') === clusterId) {
-          setWorkers([]);
-          setWorkersLoading(false);
+          setWorkerRead({ clusterId, status: 'error', workers: [] });
           reseedVersionFor([]);
           schedulePlacementCheck();
         }
@@ -775,7 +865,7 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
   return (
     <Form
       form={form}
-      onFinish={onFinish}
+      onFinish={handleFinish}
       onFinishFailed={onFinishFailed}
       onValuesChange={handleFormValuesChange}
     >
@@ -876,7 +966,10 @@ const ServiceForm: React.FC<ServiceFormProps> = forwardRef((props, ref) => {
         <SealSelect
           required
           disabled={action === PageAction.EDIT}
-          options={clusterOptions}
+          options={clusterOptions.map((item) => ({
+            ...item,
+            disabled: isGpuServiceCluster(item)
+          }))}
           label={intl.formatMessage({ id: 'clusters.title' })}
         />
       </Form.Item>

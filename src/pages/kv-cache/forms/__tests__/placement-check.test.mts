@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { afterEach, beforeEach, mock, test } from 'node:test';
 import React, { act, createElement, useEffect, useMemo, useState } from 'react';
+import type { ClusterListItem } from '../../../cluster-management/config/types';
 import type {
   CacheProviderItem,
   CacheServiceInstanceItem,
@@ -26,12 +27,14 @@ const workers = [
   {
     id: 1,
     name: 'worker-tight',
+    state: 'ready',
     labels: { pool: 'tight' },
     status: { memory: { total: 32 * GiB, used: 24 * GiB, allocated: 24 * GiB } }
   },
   {
     id: 2,
     name: 'worker-large',
+    state: 'ready',
     labels: { pool: 'large' },
     status: {
       memory: { total: 64 * GiB, used: 0, allocated: 0 },
@@ -59,6 +62,18 @@ const provider: CacheProviderItem = {
   ],
   resource_profile: { ram_gib: '{{ram_size}}' },
   inference_backend_integrations: []
+};
+const hardwareProvider: CacheProviderItem = {
+  ...provider,
+  default_version: '2.0.0',
+  fields: [
+    { name: 'ram_size', type: 'number', default: 4, min: 1 },
+    {
+      name: 'transport',
+      default: 'tcp',
+      framework_defaults: { cuda: 'cuda-ipc', cann: 'ascend' }
+    }
+  ]
 };
 const saved: ListItem = {
   id: 1,
@@ -88,12 +103,11 @@ const savedInstances = (service = saved): CacheServiceInstanceItem[] => [
   }
 ];
 type InstanceResponse = { items: CacheServiceInstanceItem[] };
-type ClusterOption = {
+type ClusterOption = Partial<ClusterListItem> & {
   id: number;
   value: number;
   name: string;
   label: string;
-  is_default?: boolean;
 };
 const clusters: ClusterOption[] = [
   { id: 1, value: 1, name: 'first', label: 'first' },
@@ -150,7 +164,7 @@ const Select = ({ value, onChange, id, label, options = [], disabled }: any) =>
     options.map((option: any) =>
       createElement(
         'option',
-        { key: option.value, value: option.value },
+        { key: option.value, value: option.value, disabled: option.disabled },
         option.label
       )
     )
@@ -383,6 +397,7 @@ const mount = async (
   const statuses: ResourceCheckStatus[] = [];
   const configChanges: boolean[] = [];
   const submissions: FormData[] = [];
+  const failures: any[] = [];
   const ref = React.createRef<any>();
   const render = async (
     data = currentData,
@@ -398,6 +413,7 @@ const mount = async (
           onFinish: async (values: FormData) => {
             submissions.push(values);
           },
+          onFinishFailed: (error: any) => failures.push(error),
           onConfigChanged: (changed: boolean) => configChanges.push(changed),
           onCheckStatusChange: (status: ResourceCheckStatus) =>
             statuses.push(status)
@@ -436,6 +452,7 @@ const mount = async (
     statuses,
     configChanges,
     submissions,
+    failures,
     render,
     instancesReady,
     ref,
@@ -483,6 +500,442 @@ test('new cache services select the default cluster after options load', async (
     await act(async () => form.ref.current.resetFields());
     await form.render(saved, provider.name);
     assert.equal(form.ref.current.form.getFieldValue('cluster_id'), 2);
+  } finally {
+    await form.unmount();
+  }
+});
+
+for (const state of ['empty', 'not_ready', 'unreachable', 'maintenance']) {
+  test(`creation reports ${state} workers only in the placement alert and blocks submission`, async () => {
+    const form = await mount('create');
+    try {
+      await form.ready(
+        [provider],
+        state === 'empty' ? [] : workers.map((worker) => ({ ...worker, state }))
+      );
+      await form.change('name', 'new-cache');
+      assert.deepEqual(form.statuses.at(-1), {
+        show: true,
+        type: 'danger',
+        message: 'kvCache.check.noReadyWorkers'
+      });
+      await form.submit();
+      assert.equal(form.submissions.length, 0);
+      assert.deepEqual(form.failures.at(-1).errorFields, []);
+      assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+      assert.equal(
+        document
+          .querySelector('#cluster_id')
+          ?.closest('.ant-form-item-has-error'),
+        null
+      );
+    } finally {
+      await form.unmount();
+    }
+  });
+}
+
+test('a singleton defaults to a Ready worker and still submits with an advisory RAM warning', async () => {
+  const form = await mount('create');
+  try {
+    await form.ready(
+      [{ ...provider, topology: 'replicas' }],
+      [workers[0], { ...workers[1], state: 'not_ready' }]
+    );
+    await form.change('name', 'new-cache');
+    assert.equal(form.ref.current.form.getFieldValue('worker_id'), 1);
+    assert.equal(
+      (
+        document.querySelector(
+          '#worker_id option[value="2"]'
+        ) as HTMLOptionElement
+      ).disabled,
+      true
+    );
+    assert.equal(
+      form.statuses.at(-1)?.message,
+      'kvCache.form.ramSize.exceedsFree'
+    );
+    await form.submit();
+    assert.equal(form.submissions.length, 1);
+    assert.equal(form.submissions[0].worker_id, 1);
+  } finally {
+    await form.unmount();
+  }
+});
+
+for (const topology of ['per_node', 'replicas'] as const) {
+  for (const first of ['workers', 'catalog']) {
+    test(`${topology} creation ignores offline CUDA for versions and defaults when ${first} arrive first`, async () => {
+      const form = await mount('create');
+      const catalog = [{ ...hardwareProvider, topology }];
+      const mixedWorkers = [workers[0], { ...workers[1], state: 'not_ready' }];
+      try {
+        if (first === 'workers') {
+          await act(async () => form.workerList.resolve(mixedWorkers));
+          await settle();
+          await act(async () => form.catalog.resolve(catalog));
+        } else {
+          await act(async () => form.catalog.resolve(catalog));
+          await settle();
+          await act(async () => form.workerList.resolve(mixedWorkers));
+        }
+        await settle();
+        assert.equal(
+          form.ref.current.form.getFieldValue('provider_version'),
+          '1.1.0'
+        );
+        assert.equal(
+          form.ref.current.form.getFieldValue([
+            'config',
+            'fields',
+            'transport'
+          ]),
+          'tcp'
+        );
+        assert.equal(
+          document.querySelector('#provider_version option[value="2.0.0"]'),
+          null
+        );
+        assert.equal(form.statuses.at(-1)?.type, 'success');
+        if (topology === 'replicas') {
+          assert.equal(
+            (
+              document.querySelector(
+                '#worker_id option[value="2"]'
+              ) as HTMLOptionElement
+            ).disabled,
+            true
+          );
+        }
+        await form.change('name', 'ready-cpu-cache');
+        await form.submit();
+        assert.equal(form.submissions.length, 1);
+        assert.equal(form.submissions[0].provider_version, '1.1.0');
+      } finally {
+        await form.unmount();
+      }
+    });
+  }
+}
+
+test('Ready CUDA determines hardware defaults even when an offline worker reports another accelerator', async () => {
+  const form = await mount('create');
+  try {
+    await form.ready(
+      [hardwareProvider],
+      [
+        {
+          ...workers[0],
+          state: 'unreachable',
+          status: { ...workers[0].status, gpu_devices: [{ type: 'cann' }] }
+        },
+        workers[1]
+      ]
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue('provider_version'),
+      '2.0.0'
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue(['config', 'fields', 'transport']),
+      'cuda-ipc'
+    );
+    assert.equal(form.statuses.at(-1)?.type, 'success');
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('Ready-worker defaults preserve an explicit version and field choice made before workers arrive', async () => {
+  const form = await mount('create');
+  try {
+    await act(async () => form.catalog.resolve([hardwareProvider]));
+    await form.change('provider_version', '1.0.0');
+    await form.change('config_fields_transport', 'manual-transport');
+    await act(async () => form.workerList.resolve([workers[1]]));
+    await settle();
+    assert.equal(
+      form.ref.current.form.getFieldValue('provider_version'),
+      '1.0.0'
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue(['config', 'fields', 'transport']),
+      'manual-transport'
+    );
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('editing keeps saved configuration and its existing version choices when CUDA is not Ready', async () => {
+  const form = await mount('edit');
+  try {
+    await form.ready(
+      [hardwareProvider],
+      [workers[0], { ...workers[1], state: 'not_ready' }]
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue('provider_version'),
+      saved.provider_version
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue(['config', 'fields', 'transport']),
+      saved.config?.fields?.transport
+    );
+    assert.ok(
+      document.querySelector('#provider_version option[value="2.0.0"]')
+    );
+    await form.change('name', 'renamed-cache');
+    await form.submit();
+    assert.equal(form.submissions.length, 1);
+    assert.equal(form.submissions[0].provider_version, saved.provider_version);
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('switching clusters recomputes unpinned versions and defaults from the new Ready workers', async () => {
+  const form = await mount('create', saved, {
+    debounceWorkers: true,
+    deferClusters: true
+  });
+  try {
+    await act(async () => form.clusters.resolve(clusters));
+    await act(async () => form.catalog.resolve([hardwareProvider]));
+    await act(async () => mock.timers.tick(300));
+    const cudaRequest = form.workerRequests.at(-1)!;
+    assert.equal(cudaRequest.clusterId, 2);
+    await act(async () => cudaRequest.response.resolve([workers[1]]));
+    await settle();
+    assert.equal(
+      form.ref.current.form.getFieldValue('provider_version'),
+      '2.0.0'
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue(['config', 'fields', 'transport']),
+      'cuda-ipc'
+    );
+
+    await form.changeNow('cluster_id', '1');
+    await act(async () => mock.timers.tick(300));
+    const cpuRequest = form.workerRequests.at(-1)!;
+    assert.equal(cpuRequest.clusterId, 1);
+    await act(async () =>
+      cpuRequest.response.resolve([
+        workers[0],
+        { ...workers[1], state: 'not_ready' }
+      ])
+    );
+    await settle();
+    assert.equal(
+      form.ref.current.form.getFieldValue('provider_version'),
+      '1.1.0'
+    );
+    assert.equal(
+      form.ref.current.form.getFieldValue(['config', 'fields', 'transport']),
+      'tcp'
+    );
+    assert.equal(
+      document.querySelector('#provider_version option[value="2.0.0"]'),
+      null
+    );
+    assert.equal(form.statuses.at(-1)?.type, 'success');
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('selecting labels without Ready targets blocks creation and recovers after selecting Ready targets', async () => {
+  const form = await mount('create');
+  try {
+    await form.ready(
+      [provider],
+      [workers[0], { ...workers[1], state: 'unreachable' }]
+    );
+    await form.change('name', 'new-cache');
+    await form.change('config_fields_ram_size', '4');
+    await form.change('worker_selector', '{"pool":"large"}');
+    assert.equal(form.statuses.at(-1)?.type, 'danger');
+    assert.equal(form.statuses.at(-1)?.message, 'kvCache.check.noReadyTargets');
+    await form.submit();
+    assert.equal(form.submissions.length, 0);
+
+    await form.change('worker_selector', '{}');
+    assert.equal(form.statuses.at(-1)?.type, 'success');
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    await form.submit();
+    assert.equal(form.submissions.length, 1);
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('creation waits for worker status without marking the cluster invalid and submits when Ready workers arrive', async () => {
+  const form = await mount('create');
+  try {
+    await act(async () => form.catalog.resolve([provider]));
+    await form.change('name', 'new-cache');
+    await form.submit();
+    assert.equal(form.submissions.length, 0);
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    assert.deepEqual(form.statuses.at(-1), {
+      show: true,
+      type: 'transition',
+      message: 'kvCache.check.workersLoading'
+    });
+    assert.equal(form.failures.length, 1);
+
+    await act(async () => form.workerList.resolve([workers[1]]));
+    await settle();
+    assert.equal(form.statuses.at(-1)?.type, 'success');
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    await form.submit();
+    assert.equal(form.submissions.length, 1);
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('a failed worker read shows an error and cannot be submitted as an empty or unchecked cluster', async () => {
+  const form = await mount('create');
+  try {
+    await act(async () => form.catalog.resolve([provider]));
+    await act(async () => form.workerList.reject(new Error('network failure')));
+    await form.change('name', 'new-cache');
+    assert.equal(form.statuses.at(-1)?.type, 'danger');
+    assert.equal(
+      form.statuses.at(-1)?.message,
+      'kvCache.check.workersUnavailable'
+    );
+    await form.submit();
+    assert.equal(form.submissions.length, 0);
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    assert.equal(form.failures.length, 1);
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('changing clusters blocks submission until the selected cluster has Ready workers', async () => {
+  const form = await mount('create', saved, {
+    debounceWorkers: true,
+    deferClusters: true
+  });
+  try {
+    await act(async () => form.clusters.resolve(clusters));
+    await act(async () => form.catalog.resolve([provider]));
+    await act(async () => mock.timers.tick(300));
+    const initialRequest = form.workerRequests.at(-1)!;
+    assert.equal(initialRequest.clusterId, 2);
+    await act(async () => initialRequest.response.resolve([workers[1]]));
+    await form.change('name', 'new-cache');
+    assert.equal(form.statuses.at(-1)?.type, 'success');
+
+    await form.changeNow('cluster_id', '1');
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    assert.deepEqual(form.statuses.at(-1), { show: false, message: '' });
+    await form.submit();
+    assert.equal(form.submissions.length, 0);
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    assert.equal(form.statuses.at(-1)?.type, 'transition');
+    await act(async () => mock.timers.tick(300));
+    const offlineRequest = form.workerRequests.at(-1)!;
+    assert.equal(offlineRequest.clusterId, 1);
+    await act(async () =>
+      offlineRequest.response.resolve([{ ...workers[0], state: 'not_ready' }])
+    );
+    await settle();
+    assert.equal(form.statuses.at(-1)?.message, 'kvCache.check.noReadyWorkers');
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+    await form.submit();
+    assert.equal(form.submissions.length, 0);
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), []);
+
+    await form.changeNow('cluster_id', '2');
+    assert.deepEqual(form.statuses.at(-1), { show: false, message: '' });
+    await act(async () => mock.timers.tick(300));
+    const readyRequest = form.workerRequests.at(-1)!;
+    assert.equal(readyRequest.clusterId, 2);
+    await act(async () => readyRequest.response.resolve([workers[1]]));
+    await settle();
+    assert.equal(form.statuses.at(-1)?.type, 'success');
+    await form.submit();
+    assert.equal(form.submissions.length, 1);
+    assert.equal(form.submissions[0].cluster_id, 2);
+  } finally {
+    await form.unmount();
+  }
+});
+
+for (const [name, options, expected] of [
+  [
+    'a GPU Service default alongside a model cluster',
+    [{ ...clusters[1], k8s_options: { gpuInstanceOptions: {} } }, clusters[0]],
+    1
+  ],
+  [
+    'only a GPU Service cluster',
+    [{ ...clusters[1], k8s_options: { gpuInstanceOptions: {} } }],
+    undefined
+  ],
+  [
+    'a model default alongside a GPU Service cluster',
+    [
+      { ...clusters[0], k8s_options: { gpuInstanceOptions: {} } },
+      { ...clusters[1], k8s_options: {} }
+    ],
+    2
+  ]
+] as const) {
+  test(`cache cluster picker disables GPU Service clusters with ${name}`, async () => {
+    const form = await mount('create', saved, { deferClusters: true });
+    try {
+      await act(async () => form.clusters.resolve([...options]));
+      assert.equal(form.ref.current.form.getFieldValue('cluster_id'), expected);
+      for (const cluster of options) {
+        const option = document.querySelector<HTMLOptionElement>(
+          `#cluster_id option[value="${cluster.id}"]`
+        );
+        assert.ok(option, 'GPU Service clusters should remain visible');
+        assert.equal(
+          option.disabled,
+          !!cluster.k8s_options?.gpuInstanceOptions
+        );
+      }
+    } finally {
+      await form.unmount();
+    }
+  });
+}
+
+test('creation still validates a missing cluster selection inline', async () => {
+  const form = await mount('create', saved, { deferClusters: true });
+  try {
+    await act(async () => form.clusters.resolve([]));
+    await act(async () => form.catalog.resolve([provider]));
+    await form.change('name', 'new-cache');
+    await form.submit();
+    assert.equal(form.submissions.length, 0);
+    assert.deepEqual(form.ref.current.form.getFieldError('cluster_id'), [
+      'Required'
+    ]);
+  } finally {
+    await form.unmount();
+  }
+});
+
+test('metadata edits remain saveable when a service cluster has no Ready workers', async () => {
+  const form = await mount('edit');
+  try {
+    await form.ready(
+      [provider],
+      workers.map((worker) => ({ ...worker, state: 'not_ready' }))
+    );
+    await form.change('name', 'renamed-cache');
+    await form.submit();
+    assert.equal(form.submissions.length, 1);
+    assert.equal(form.submissions[0].name, 'renamed-cache');
   } finally {
     await form.unmount();
   }

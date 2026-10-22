@@ -221,6 +221,7 @@ export const InstanceStatusValueMap = {
   Deleting: 'Deleting',
   Stopping: 'Stopping',
   Stopped: 'Stopped',
+  Failed: 'Failed',
   CreateFailed: 'CreateFailed',
   SSHPublicKeyCreateFailed: 'SSHPublicKeyCreateFailed',
   PersistentVolumeTypeCreateFailed: 'PersistentVolumeTypeCreateFailed',
@@ -237,7 +238,8 @@ export const K8SStatuses = [
   InstanceStatusValueMap.Initialized,
   InstanceStatusValueMap.Preparing,
   InstanceStatusValueMap.NotReady,
-  InstanceStatusValueMap.Ready
+  InstanceStatusValueMap.Ready,
+  InstanceStatusValueMap.Failed
 ];
 
 // Phases whose Pod is running, so the metrics subresource has something to
@@ -309,6 +311,7 @@ export const status: Record<string, StatusType> = {
   [InstanceStatusValueMap.Deleting]: StatusMaps.warning,
   [InstanceStatusValueMap.Stopping]: StatusMaps.transitioning,
   [InstanceStatusValueMap.Stopped]: StatusMaps.inactive,
+  [InstanceStatusValueMap.Failed]: StatusMaps.error,
   [InstanceStatusValueMap.CreateFailed]: StatusMaps.error,
   [InstanceStatusValueMap.SSHPublicKeyCreateFailed]: StatusMaps.error,
   [InstanceStatusValueMap.PersistentVolumeTypeCreateFailed]: StatusMaps.error,
