@@ -18,6 +18,8 @@ export default {
   'kvCache.table.provider': 'Sağlayıcı',
   'kvCache.table.worker': 'İşçi Düğüm',
   'kvCache.form.provider': 'Sağlayıcı',
+  'kvCache.form.cluster.tips':
+    'GPU hizmeti türündeki kümeler önbellek hızlandırmayı desteklemez.',
   'kvCache.form.version': 'Sürüm',
   'kvCache.form.version.custom': 'Özel',
   'kvCache.form.image': 'Konteyner İmajı',
