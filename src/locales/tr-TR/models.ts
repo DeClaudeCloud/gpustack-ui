@@ -1,4 +1,28 @@
 export default {
+  'models.instance.workloads.state.pending': 'Bekliyor',
+  'models.instance.workloads.state.running': 'Çalışıyor',
+  'models.instance.workloads.state.stopped': 'Durduruldu',
+  'models.instance.workloads.state.failed': 'Başarısız',
+  'models.instance.workloads.state.unknown': 'Bilinmiyor',
+  'models.instance.workloads.localDPSize': 'Yerel DP sayısı: {count}',
+  'models.instance.workloads.logicalDPSize': 'Mantıksal DP sayısı: {count}',
+  'models.instance.workloads.apiReady': 'API hazır',
+  'models.instance.workloads.apiNotReady': 'API hazır değil',
+  'models.instance.workloads.apiUnknown': 'API hazırlık durumu bilinmiyor',
+  'models.instance.workloads': 'Workload / rank',
+  'models.instance.workloads.pending': 'Workload kaydı bekleniyor',
+  'models.instance.monitor.rank': 'DP {rank} izle',
+  'models.instance.monitor.engine': 'Paylaşılan Engine izle',
+  'models.instance.monitor.smg': 'SMG izle (attempt {attempt})',
+  'models.instance.monitor.logicalDP': 'Mantıksal DP izle',
+  'models.instance.monitor.logicalRank':
+    'Mantıksal DP {rank} · paylaşılan Engine',
+  'models.instance.monitor.logicalHint':
+    'Mantıksal DP, paylaşılan Engine üzerinde filtre uygular. Yerel dp_rank içermeyen metrikler No data gösterebilir.',
+  'models.instance.monitor.target': 'Worker {worker} üzerindeki R{run} izle',
+  'models.form.external.conflict':
+    'Yalnızca bir veri paralel yük dengeleme modu etkinleştirilebilir.',
+
   'models.scaling.paused': 'Duraklatıldı',
   'models.scaling.waiting': 'Zamanlama bekleniyor',
   'models.scaling.resume': 'Zamanlamayı Sürdür',
@@ -627,7 +651,7 @@ export default {
   'models.pd.degraded.engineVersion':
     'Sabitlenen motor sürümü, seçilen PD reçetesinin desteklediğini bildirdiği aralığın altında. Buna izin verilir — kendiniz derlediğiniz bir imaj özel bir sürüm numarası taşıyabilir — ancak reçetenin varsaydığı davranış eksik olabilir: örneğin 0.5.7 altındaki SGLang sürümlerinde, ölçek küçültmeyle çıkarılan bir üyenin kaydı silinemez ve trafik almayı sürdürür.',
   'models.pd.degraded.pairingUnverified':
-    'Eşleştirme parametresi rollerden yalnızca birinde açıkça belirtilmiş, diğerinde motorun varsayılanına bırakılmış; bu yüzden GPUStack ikisinin uyuştuğunu doğrulayamadı — tipik olarak --max-model-len, --block-size, --kv-cache-layout ya da bir tarafta auto, diğerinde belirli bir dtype. Bu, eşleştirmenin yanlış olduğu anlamına gelmez; yalnızca doğrulanmadığı anlamına gelir. Doğrulanması için parametreyi iki rolde de yazın.',
+    'GPUStack, Prefill ve Decode rollerinin bazı ayarlarının eşleştirme gereksinimlerini karşılayıp karşılamadığını doğrulayamadı. Bu durum genellikle rollerden birinde bir eşleştirme parametresinin değeri açıkça belirtilirken diğerinde motorun varsayılan değeri kullanıldığında (örneğin --max-model-len, --block-size veya --kv-cache-layout için) ya da değeri motor otomatik olarak seçtiğinde (örneğin bir rolde --dtype=auto, diğerinde --dtype=float16 olduğunda) görülür.\n\nDağıtıma devam edilebilir. Bu durumlarda GPUStack’in doğrulama yapabilmesi için ilgili parametreye her iki rolde de açıkça belirli bir değer atayın.',
   'models.pd.degraded.pairingTP':
     'Üyelerin gerçekte aldığı kartlardan yeniden hesaplanan etkin tensör paralelliği, bu PD reçetesinin bildirdiği yönü ihlal ediyor: NIXL, decode’un prefill’den dar olmamasını; Ascend Mooncake ise prefill’in decode’dan dar olmamasını gerektirir. Kart sabitlemeyen ve --tensor-parallel-size yazmayan bir rolün yerleşimden önce denetlenecek bir sayısı olmadığı için bu, kabul aşamasında yakalanamaz. --tensor-parallel-size değerini iki rolde de ayarlayın veya reçetenin izin verdiği GPU sayılarını verin.',
   'models.pd.admission.infeasible':
@@ -635,10 +659,10 @@ export default {
   'models.pd.ratio.waiting':
     'Oran {configured} (şu an {current}, {role} bekleniyor)',
   'models.instance.draining.tips':
-    'Ölçek küçültüldü. Yeni istek almıyor; KV önbelleğini hâlâ çeken decode örnekleri bitene kadar çalışmaya devam ediyor, ardından siliniyor.',
+    'Örnek durduruluyor. Tüm Workload görevleri durana kadar kayıt korunur.',
   'models.pd.group.restarting.brief': 'Yeniden başlatılıyor…',
   'models.pd.group.restarting.progress':
-    'Grup yeniden başlatılıyor: üyeleri bilerek durduruldu ve yeniden oluşturuluyor, şu ana kadar {ready}/{total} hazır. Kopya sayılarının düşük görünmesi bu yüzdendir, grup arızalandığı için değil.',
+    'Tüm eski Workload görevleri durduktan sonra grup yeniden oluşturulacak: {ready}/{total} hazır.',
   'models.pd.group.restart.confirm':
     'Bu değişiklik tüm PD grubunun yeniden başlatılmasını gerektirir: önce {total} örneğin tümü durdurulur, sonra yeni yapılandırmayla yeniden oluşturulur; bu sürede model kullanılamaz.',
   'models.pd.instance.stale':

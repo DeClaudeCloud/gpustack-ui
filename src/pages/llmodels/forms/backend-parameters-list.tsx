@@ -1,9 +1,9 @@
 import { getDocumentationUrl } from '@/utils/documentation';
-import { ListInput } from '@gpustack/core-ui';
+import { AutoComplete, ListInput } from '@gpustack/core-ui';
 import { useIntl } from '@umijs/max';
 import { Form } from 'antd';
 import _ from 'lodash';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { backendParamsHolderTips, getBackendParamsTips } from '../config';
 import { useFormContext } from '../config/form-context';
 import { FormData, PDMode } from '../config/types';
@@ -11,6 +11,64 @@ import BackendParameters, {
   backendOptionsMap
 } from '../constants/backend-parameters';
 import { getRouterParameterConfig } from '../constants/backend-parameters/router';
+import {
+  conflictingExternalLBParameters,
+  hasConflictingExternalLB
+} from '../constants/backend-parameters/vllm';
+
+// ListInput owns adding, removing and pasting rows; each input owns its status.
+const ParameterInput = ({
+  data,
+  handlers,
+  options,
+  placeholder,
+  invalid
+}: {
+  data: { value: string };
+  handlers: {
+    onChange: (value: string) => void;
+    onBlur?: (event: any) => void;
+    onPaste?: (event: any) => void;
+  };
+  options: Global.HintOptions[];
+  placeholder: string;
+  invalid: boolean;
+}) => {
+  const [context, setContext] = useState('');
+  const match = context.match(/[^=]+=[^=]*$/);
+  const [key, value] = match ? match[0].split('=') : [];
+  const hints = !context
+    ? options
+    : match
+      ? (options.find((item) => item.label === key)?.opts || []).filter(
+          (item) => String(item.label).includes(value)
+        )
+      : options.filter((item) => item.label.includes(context));
+  const updateContext = (event: any) =>
+    setContext(event.target.value.slice(0, event.target.selectionStart));
+  return (
+    <Form.Item noStyle validateStatus={invalid ? 'error' : ''}>
+      <AutoComplete
+        value={data.value}
+        trim={false}
+        placeholder={placeholder}
+        options={hints}
+        defaultActiveFirstOption
+        onFocus={updateContext}
+        onInput={(event: any) => {
+          updateContext(event);
+          handlers.onChange(event.target.value);
+        }}
+        onSelect={(selected: string) =>
+          handlers.onChange(match ? `${key}=${selected}` : selected.trim())
+        }
+        onBlur={handlers.onBlur}
+        onPaste={handlers.onPaste}
+        style={{ flex: 1, minWidth: 0 }}
+      />
+    </Form.Item>
+  );
+};
 
 interface BackendParametersListProps {
   /**
@@ -40,6 +98,28 @@ const BackendParametersList: React.FC<BackendParametersListProps> = ({
   const roleBackend = Form.useWatch(path('backend'), form);
   const modelBackend = Form.useWatch('backend', form);
   const backend = roleBackend ?? modelBackend;
+  const parameters = Form.useWatch(path('backend_parameters'), form);
+  const env = Form.useWatch('env', { form, preserve: true });
+  const roles = Form.useWatch('roles', { form, preserve: true });
+  const disaggregation = Form.useWatch('disaggregation', {
+    form,
+    preserve: true
+  });
+  const manualDP =
+    !namePrefix &&
+    !disaggregation &&
+    !roles?.length &&
+    ['1', 'true', 'yes', 'on'].includes(
+      String(env?.GPUSTACK_MANUAL_DP ?? '')
+        .trim()
+        .toLowerCase()
+    );
+  const validateManagedLB =
+    router === undefined && backend === backendOptionsMap.vllm && !manualDP;
+  const conflicts = validateManagedLB
+    ? conflictingExternalLBParameters(parameters)
+    : [];
+
   const routerConfig = useMemo(
     () => (router === undefined ? undefined : getRouterParameterConfig(router)),
     [router]
@@ -81,7 +161,20 @@ const BackendParametersList: React.FC<BackendParametersListProps> = ({
   };
 
   return (
-    <Form.Item<FormData> name={path('backend_parameters')}>
+    <Form.Item<FormData>
+      name={path('backend_parameters')}
+      dependencies={['env', 'roles', 'disaggregation']}
+      rules={[
+        {
+          validator: async (_, value) => {
+            if (validateManagedLB && hasConflictingExternalLB(value))
+              throw new Error(
+                intl.formatMessage({ id: 'models.form.external.conflict' })
+              );
+          }
+        }
+      ]}
+    >
       <ListInput
         trim={false}
         placeholder={
@@ -98,6 +191,15 @@ const BackendParametersList: React.FC<BackendParametersListProps> = ({
         onBlur={handleBackendParametersOnBlur}
         onDelete={handleDeleteBackendParameters}
         options={paramsConfig}
+        renderItem={(data, handlers) => (
+          <ParameterInput
+            data={data}
+            handlers={handlers}
+            options={paramsConfig}
+            placeholder={holder ? intl.formatMessage({ id: holder }) : ''}
+            invalid={conflicts.includes(data.value)}
+          />
+        )}
         description={
           backendParamsLink && (
             <span>
@@ -114,7 +216,7 @@ const BackendParametersList: React.FC<BackendParametersListProps> = ({
                     }
                   )
                 }}
-              ></span>
+              />
             </span>
           )
         }

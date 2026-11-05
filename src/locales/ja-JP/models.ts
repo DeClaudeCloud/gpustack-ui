@@ -1,4 +1,27 @@
 export default {
+  'models.instance.workloads.state.pending': '待機中',
+  'models.instance.workloads.state.running': '実行中',
+  'models.instance.workloads.state.stopped': '停止済み',
+  'models.instance.workloads.state.failed': '失敗',
+  'models.instance.workloads.state.unknown': '不明',
+  'models.instance.workloads.localDPSize': 'ローカル DP 数：{count}',
+  'models.instance.workloads.logicalDPSize': '論理 DP 数：{count}',
+  'models.instance.workloads.apiReady': 'API 準備完了',
+  'models.instance.workloads.apiNotReady': 'API 未準備',
+  'models.instance.workloads.apiUnknown': 'API の準備状態は不明',
+  'models.instance.workloads': 'Workload / rank',
+  'models.instance.workloads.pending': 'Workload の登録待ち',
+  'models.instance.monitor.rank': 'DP {rank} の監視',
+  'models.instance.monitor.engine': '共有 Engine の監視',
+  'models.instance.monitor.smg': 'SMG の監視（attempt {attempt}）',
+  'models.instance.monitor.logicalDP': '論理 DP の監視',
+  'models.instance.monitor.logicalRank': '論理 DP {rank} · 共有 Engine',
+  'models.instance.monitor.logicalHint':
+    '論理 DP は共有 Engine を絞り込みます。ネイティブ dp_rank を持たない指標は No data になる場合があります。',
+  'models.instance.monitor.target': 'Worker {worker} の R{run} を監視',
+  'models.form.external.conflict':
+    'データ並列の負荷分散モードは1つだけ有効にできます。',
+
   'models.scaling.paused': '一時停止中',
   'models.scaling.waiting': 'スケジュール待機中',
   'models.scaling.resume': 'スケジュールを再開',
@@ -634,7 +657,7 @@ export default {
   'models.pd.degraded.engineVersion':
     '固定されているエンジンバージョンが、選択した PD レシピが対応を宣言する範囲を下回っています。これは許容されます —— 自前でビルドしたイメージが独自のバージョン番号を持つことがあります —— が、レシピが前提とする動作が存在しない可能性があります。たとえば SGLang 0.5.7 未満では、縮退で外されたメンバーを登録解除できず、トラフィックを受け取り続けます。',
   'models.pd.degraded.pairingUnverified':
-    'ペアリング要素が一方のロールだけで明示され、もう一方はエンジンの既定値に委ねられているため、両者が一致するか検証できませんでした —— 典型的には --max-model-len、--block-size、--kv-cache-layout、または片側が auto でもう片側が具体的な dtype の場合です。ペアリングが誤っているという意味ではなく、検証されていないという意味です。両方のロールに明記すると検証されます。',
+    'GPUStack は、Prefill と Decode の一部の設定がペアリング要件を満たしているか確認できませんでした。よくあるのは、一方のロールでペアリングパラメーターの値を明示的に指定し、もう一方ではエンジンの既定値を使用する場合（--max-model-len、--block-size、--kv-cache-layout など）や、値の選択をエンジンに任せる場合（例として、一方で --dtype=auto、もう一方で --dtype=float16 を指定）です。\n\nデプロイは続行できます。上記の場合は、GPUStack が検証できるように、両方のロールで該当パラメーターに具体的な値を明示的に設定してください。',
   'models.pd.degraded.pairingTP':
     'メンバーが実際に取得したカードから再計算した実効テンソル並列度が、この PD レシピの宣言する方向に反しています：NIXL は Decode が Prefill 以上、Ascend Mooncake は Prefill が Decode 以上である必要があります。カードを固定せず --tensor-parallel-size も書かないロールは配置されるまで検査できる数値を持たないため、受け入れ時には検出できません。両方のロールに --tensor-parallel-size を設定するか、レシピが許す枚数を割り当ててください。',
   'models.pd.admission.infeasible':
@@ -642,10 +665,10 @@ export default {
   'models.pd.ratio.waiting':
     '配分 {configured}（現在 {current}、{role} を待機中）',
   'models.instance.draining.tips':
-    'スケールインされました。新しいリクエストは受け付けず、KV キャッシュを取得中の Decode が完了するまで稼働を続けたあと削除されます。',
+    'インスタンスを停止中です。すべての Workload が停止するまで保持されます。',
   'models.pd.group.restarting.brief': '再起動中…',
   'models.pd.group.restarting.progress':
-    'グループを再起動中：メンバーは意図的に停止され、再作成されています（現在 {ready}/{total} が準備完了）。レプリカ数が少なく見えるのはそのためで、障害が起きたからではありません。',
+    'すべての旧 Workload の停止後にグループを再構築します。準備完了: {ready}/{total}。',
   'models.pd.group.restart.confirm':
     'この変更には PD グループ全体の再起動が必要です：まず {total} 個すべてのインスタンスを停止し、新しい設定で再作成します。その間モデルは利用できません。',
   'models.pd.instance.stale':

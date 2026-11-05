@@ -1,4 +1,28 @@
 export default {
+  'models.instance.workloads.state.pending': 'В ожидании',
+  'models.instance.workloads.state.running': 'Выполняется',
+  'models.instance.workloads.state.stopped': 'Остановлено',
+  'models.instance.workloads.state.failed': 'Ошибка',
+  'models.instance.workloads.state.unknown': 'Неизвестно',
+  'models.instance.workloads.localDPSize': 'Количество локальных DP: {count}',
+  'models.instance.workloads.logicalDPSize':
+    'Количество логических DP: {count}',
+  'models.instance.workloads.apiReady': 'API готов',
+  'models.instance.workloads.apiNotReady': 'API не готов',
+  'models.instance.workloads.apiUnknown': 'Готовность API неизвестна',
+  'models.instance.workloads': 'Workload / rank',
+  'models.instance.workloads.pending': 'Ожидание регистрации Workload',
+  'models.instance.monitor.rank': 'Мониторинг DP {rank}',
+  'models.instance.monitor.engine': 'Мониторинг общего Engine',
+  'models.instance.monitor.smg': 'Мониторинг SMG (attempt {attempt})',
+  'models.instance.monitor.logicalDP': 'Мониторинг логического DP',
+  'models.instance.monitor.logicalRank': 'Логический DP {rank} · общий Engine',
+  'models.instance.monitor.logicalHint':
+    'Логический DP фильтрует общий Engine. Метрики без нативного dp_rank могут показывать No data.',
+  'models.instance.monitor.target': 'Мониторинг R{run} на Worker {worker}',
+  'models.form.external.conflict':
+    'Можно включить только один режим балансировки нагрузки параллелизма данных.',
+
   'models.scaling.paused': 'Приостановлено',
   'models.scaling.waiting': 'Ожидание расписания',
   'models.scaling.resume': 'Возобновить расписание',
@@ -633,7 +657,7 @@ export default {
   'models.pd.degraded.engineVersion':
     'Закреплённая версия движка ниже диапазона, поддержку которого объявляет выбранный PD-рецепт. Это допустимо — у самостоятельно собранного образа может быть собственный номер версии, — но поведения, на которое рассчитывает рецепт, может не оказаться: например, на SGLang ниже 0.5.7 участника, выведенного при уменьшении числа реплик, нельзя снять с регистрации, и он продолжает принимать трафик.',
   'models.pd.degraded.pairingUnverified':
-    'Одна роль задаёт параметр связывания явно, а другая оставляет его значению движка по умолчанию, поэтому GPUStack не смог проверить их согласованность — обычно это --max-model-len, --block-size, --kv-cache-layout либо auto с одной стороны против явного dtype с другой. Это не значит, что пара настроена неверно, — значит, что её никто не проверил. Укажите параметр в обеих ролях, чтобы он проверялся.',
+    'GPUStack не удалось подтвердить, что некоторые настройки Prefill и Decode соответствуют требованиям к связыванию ролей. Часто это происходит, когда для одной роли значение параметра связывания задано явно, а для другой движок использует значение по умолчанию (например, для --max-model-len, --block-size или --kv-cache-layout) либо выбирает значение автоматически (например, если для одной роли задано --dtype=auto, а для другой — --dtype=float16).\n\nРазвёртывание можно продолжить. В этих случаях явно задайте конкретное значение параметра для обеих ролей, чтобы GPUStack мог проверить настройки.',
   'models.pd.degraded.pairingTP':
     'Эффективная тензорная параллельность, пересчитанная по картам, которые участники действительно получили, нарушает направление, объявленное этим PD-рецептом: NIXL требует, чтобы Decode был не уже Prefill, Ascend Mooncake — чтобы Prefill был не уже Decode. На приёме это не поймать: у роли, которая не закрепляет карты и не задаёт --tensor-parallel-size, до размещения нет числа для проверки. Задайте --tensor-parallel-size в обеих ролях или выделите им количество GPU, допустимое рецептом.',
   'models.pd.admission.infeasible':
@@ -641,10 +665,10 @@ export default {
   'models.pd.ratio.waiting':
     'Соотношение {configured} (сейчас {current}, ожидается {role})',
   'models.instance.draining.tips':
-    'Масштабирование вниз. Экземпляр больше не принимает новые запросы и продолжает работать, пока Decode-узлы не дочитают его KV-кеш, после чего удаляется.',
+    'Остановка экземпляра. Запись сохраняется до остановки всех Workload.',
   'models.pd.group.restarting.brief': 'Перезапуск…',
   'models.pd.group.restarting.progress':
-    'Перезапуск группы: её участники были намеренно остановлены и сейчас пересоздаются, готово {ready}/{total}. Счётчики реплик занижены именно поэтому, а не из-за сбоя.',
+    'Ожидание остановки всех старых Workload перед пересозданием группы: готово {ready}/{total}.',
   'models.pd.group.restart.confirm':
     'Это изменение требует перезапуска всей группы PD: сначала останавливаются все {total} экземпляров, затем они пересоздаются с новой конфигурацией; в это время модель недоступна.',
   'models.pd.instance.stale':

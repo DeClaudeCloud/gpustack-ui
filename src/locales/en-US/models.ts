@@ -1,4 +1,27 @@
 export default {
+  'models.instance.workloads.state.pending': 'Pending',
+  'models.instance.workloads.state.running': 'Running',
+  'models.instance.workloads.state.stopped': 'Stopped',
+  'models.instance.workloads.state.failed': 'Failed',
+  'models.instance.workloads.state.unknown': 'Unknown',
+  'models.instance.workloads.localDPSize': 'Local DP count: {count}',
+  'models.instance.workloads.logicalDPSize': 'Logical DP count: {count}',
+  'models.instance.workloads.apiReady': 'API ready',
+  'models.instance.workloads.apiNotReady': 'API not ready',
+  'models.instance.workloads.apiUnknown': 'API readiness unknown',
+  'models.instance.workloads': 'Workloads / ranks',
+  'models.instance.workloads.pending': 'Waiting for workload registration',
+  'models.instance.monitor.rank': 'Monitor DP {rank}',
+  'models.instance.monitor.engine': 'Monitor shared Engine',
+  'models.instance.monitor.smg': 'Monitor SMG (attempt {attempt})',
+  'models.instance.monitor.logicalDP': 'Monitor logical DP',
+  'models.instance.monitor.logicalRank': 'Logical DP {rank} · shared Engine',
+  'models.instance.monitor.logicalHint':
+    'Logical DP filters the shared Engine. Metrics without native dp_rank may show No data.',
+  'models.instance.monitor.target': 'Monitor R{run} on Worker {worker}',
+  'models.form.external.conflict':
+    'Choose only one data-parallel load balancing mode.',
+
   'models.scaling.paused': 'Paused',
   'models.scaling.waiting': 'Waiting for scheduled scaling',
   'models.scaling.resume': 'Resume Schedule',
@@ -625,7 +648,7 @@ export default {
   'models.pd.degraded.engineVersion':
     'The pinned engine version is below the range the selected PD recipe declares support for. This is allowed — a self-built image may carry a private version number — but the behaviour the recipe assumes may be missing: on SGLang below 0.5.7, for example, a scaled-down member cannot be deregistered and keeps taking traffic.',
   'models.pd.degraded.pairingUnverified':
-    'One role declares a pairing factor and the other leaves it to the engine default, so GPUStack could not verify that the two agree — typically --max-model-len, --block-size, --kv-cache-layout, or one side set to auto against a named dtype. It does not mean the pair is wrong, only that nothing checked it. Write the factor on both roles to have it verified.',
+    'GPUStack could not confirm that certain Prefill and Decode settings meet the pairing requirements. This commonly occurs when one role explicitly sets a pairing parameter and the other uses the engine default (for a parameter such as --max-model-len, --block-size, or --kv-cache-layout) or lets the engine choose the value automatically (for example, --dtype=auto on one role and --dtype=float16 on the other).\n\nDeployment can proceed. In these cases, explicitly set a concrete value for the parameter on both roles so GPUStack can validate the configuration.',
   'models.pd.degraded.pairingTP':
     'The effective tensor parallelism — recomputed from the cards the members actually got — breaks the direction this PD recipe declares: NIXL needs decode at least as wide as prefill, Ascend Mooncake needs prefill at least as wide as decode. Admission could not catch this, because a role that pins no cards and writes no --tensor-parallel-size has no number to check until it is placed. Set --tensor-parallel-size on both roles, or give them GPU counts the recipe allows.',
   'models.pd.admission.infeasible':
@@ -633,10 +656,10 @@ export default {
   'models.pd.ratio.waiting':
     'Ratio {configured} (currently {current}, waiting for {role})',
   'models.instance.draining.tips':
-    'Scaled down. It no longer takes new requests and keeps running until the decodes still fetching its KV cache are done, then it is deleted.',
+    'Stopping this instance. It is retained until all workloads have stopped.',
   'models.pd.group.restarting.brief': 'Restarting…',
   'models.pd.group.restarting.progress':
-    'Restarting the group: its members were stopped on purpose and are being rebuilt, {ready}/{total} ready so far. The replica counts read low for that reason, not because the group failed.',
+    'Waiting for all old workloads to stop, then rebuilding the group: {ready}/{total} ready.',
   'models.pd.group.restart.confirm':
     'This change needs the whole PD group restarted: all {total} instances are stopped first and rebuilt with the new configuration, and the model is unavailable in between.',
   'models.pd.instance.stale':

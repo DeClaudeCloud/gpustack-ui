@@ -2,10 +2,13 @@ import useDownloadInstanceLogs from '@/pages/llmodels/hooks/use-download-instanc
 import { useBenchmarkTargetInstance } from '@/pages/llmodels/hooks/use-run-benchmark';
 import { DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { DropdownButtons, IconFont } from '@gpustack/core-ui';
+import { useEffect, useState } from 'react';
 import {
   InstanceStatusMap,
-  RoleValueMap,
-  modelCategoriesMap
+  isRestartInFlight,
+  modelCategoriesMap,
+  RESTART_LAPSE_MS,
+  RoleValueMap
 } from '../../config';
 import { ListItem, ModelInstanceListItem } from '../../config/types';
 
@@ -63,6 +66,21 @@ const ActionsCell: React.FC<ActionsCellProps> = ({
 }) => {
   const { runBenchmarkOnInstance } = useBenchmarkTargetInstance();
   const { downloadLogs } = useDownloadInstanceLogs();
+  const [, expireRestart] = useState(0);
+  const since = modelData?.restarting_since
+    ? Date.parse(modelData.restarting_since)
+    : NaN;
+  const restarting = isRestartInFlight(modelData?.restarting_since);
+
+  // Recompute the menu at expiry even when the model emits no further updates.
+  useEffect(() => {
+    if (!restarting) return;
+    const timer = setTimeout(
+      () => expireRestart((tick) => tick + 1),
+      Math.max(since + RESTART_LAPSE_MS - Date.now(), 0)
+    );
+    return () => clearTimeout(timer);
+  }, [restarting, since]);
 
   const handleOnSelect = (val: string) => {
     if (val === 'benchmark') {
@@ -75,6 +93,8 @@ const ActionsCell: React.FC<ActionsCellProps> = ({
   };
 
   const actionItems = childActionList.filter((action: any) => {
+    if (action.key === 'delete' && (record.draining_since || restarting))
+      return false;
     if (action.key === 'benchmark') {
       // A run measures the path a request takes, and in a group that path
       // enters through the router. A prefill or a decode answers on its own

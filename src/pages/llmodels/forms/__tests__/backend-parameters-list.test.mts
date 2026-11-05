@@ -16,9 +16,36 @@ const externalBackendLinks: Record<string, string> = {
 };
 mock.module('@gpustack/core-ui', {
   namedExports: {
+    AutoComplete: (props: any) =>
+      createElement('input', {
+        value: props.value,
+        'data-status': Form.Item.useStatus().status,
+        onChange: props.onInput
+      }),
     ListInput: (props: any) => {
       listProps = props;
-      return createElement('div', null, props.description);
+      return createElement(
+        'div',
+        null,
+        props.description,
+        ...(props.value || []).map((value: string, index: number) =>
+          createElement(
+            'div',
+            { key: index },
+            props.renderItem?.(
+              { value },
+              {
+                onChange: (next: string) =>
+                  props.onChange(
+                    props.value.map((v: string, i: number) =>
+                      i === index ? next : v
+                    )
+                  )
+              }
+            )
+          )
+        )
+      );
     }
   }
 });
@@ -77,8 +104,18 @@ test('parameter hints follow the router executable while engine roles retain eng
   const container = dom.window.document.getElementById('root')!;
   const root = createRoot(container);
   const onValuesChange = mock.fn();
+  let currentForm: any;
+  let changeEnv: (value: Record<string, string>) => void;
+  const EnvField = ({ onChange }: any) => {
+    changeEnv = onChange;
+    return null;
+  };
   const commonParameter = '--engine-only-parameter';
-  const render = async (backend: string, router?: PDMode['router']) => {
+  const render = async (
+    backend: string,
+    router?: PDMode['router'],
+    ordinary = false
+  ) => {
     await act(async () => {
       root.render(
         createElement(
@@ -93,14 +130,25 @@ test('parameter hints follow the router executable while engine roles retain eng
           },
           createElement(
             Form,
-            { key: backend, initialValues: { backend } },
+            {
+              key: backend,
+              initialValues: { backend },
+              ref: (instance: any) => {
+                currentForm = instance;
+              }
+            },
             createElement(
               Form.Item,
               { name: 'backend', hidden: true },
               createElement('input')
             ),
+            createElement(
+              Form.Item,
+              { name: 'env', noStyle: true },
+              createElement(EnvField)
+            ),
             createElement(BackendParametersList, {
-              namePrefix: ['roles', 0],
+              namePrefix: ordinary ? undefined : ['roles', 0],
               router
             })
           )
@@ -112,6 +160,18 @@ test('parameter hints follow the router executable while engine roles retain eng
     listProps.options.find((item: any) => item.value === flag);
   const choices = (flag: string) =>
     option(flag)?.opts?.map((item: any) => item.value);
+  const waitForDependentValidation = async () => {
+    await act(async () => {
+      for (
+        let attempt = 0;
+        attempt < 100 && currentForm.isFieldValidating('backend_parameters');
+        attempt++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    });
+    assert.equal(currentForm.isFieldValidating('backend_parameters'), false);
+  };
 
   try {
     await render('vLLM', { entrypoint: ['vllm-router'] });
@@ -180,6 +240,99 @@ test('parameter hints follow the router executable while engine roles retain eng
       );
     }
 
+    await render('vLLM');
+    await act(async () => {
+      listProps.onChange(null);
+    });
+    await act(async () => {
+      await currentForm.validateFields();
+    });
+    assert.equal(container.querySelector('input[data-status]'), null);
+    await act(async () => {
+      listProps.onChange([
+        '--data-parallel-external-lb',
+        '--data-parallel-multi-port-external-lb',
+        '--max-model-len=4096'
+      ]);
+    });
+    await act(async () => {
+      await assert.rejects(currentForm.validateFields(), (error: any) => {
+        assert.deepEqual(error.errorFields[0].errors, [
+          'models.form.external.conflict'
+        ]);
+        return true;
+      });
+    });
+    const statuses = [...container.querySelectorAll('input[data-status]')].map(
+      (input) => input.getAttribute('data-status')
+    );
+    assert.deepEqual(statuses, ['error', 'error', '']);
+    assert.doesNotMatch(
+      container.textContent!,
+      /models.form.external.help|models.form.smg.policy.help/
+    );
+    await act(async () => {
+      listProps.onChange(['--data-parallel-size=4']);
+    });
+    await act(async () => {
+      await currentForm.validateFields();
+    });
+
+    await render('vLLM', undefined, true);
+    await act(async () => {
+      currentForm.setFieldsValue({
+        roles: [],
+        env: {},
+        backend_parameters: ['-dpe', '-dph']
+      });
+    });
+    await act(async () => {
+      await assert.rejects(currentForm.validateFields());
+    });
+    for (const enabled of ['1', ' TRUE ', 'yes', 'on']) {
+      await act(async () => {
+        changeEnv({ GPUSTACK_MANUAL_DP: enabled });
+      });
+      await waitForDependentValidation();
+      assert.deepEqual(currentForm.getFieldError('backend_parameters'), []);
+      await act(async () => {
+        await currentForm.validateFields();
+      });
+      assert.ok(
+        [...container.querySelectorAll('input[data-status]')].every(
+          (input) => input.getAttribute('data-status') !== 'error'
+        )
+      );
+    }
+    await act(async () => {
+      changeEnv({});
+    });
+    await waitForDependentValidation();
+    assert.deepEqual(currentForm.getFieldError('backend_parameters'), [
+      'models.form.external.conflict'
+    ]);
+    await act(async () => {
+      await assert.rejects(currentForm.validateFields());
+    });
+    await act(async () => {
+      currentForm.setFieldsValue({
+        env: { GPUSTACK_MANUAL_DP: '1' },
+        disaggregation: { mode: 'vllm-nixl' }
+      });
+    });
+    await act(async () => {
+      await assert.rejects(currentForm.validateFields());
+    });
+    await act(async () => {
+      currentForm.setFieldsValue({
+        disaggregation: null,
+        roles: [{ name: 'prefill' }]
+      });
+    });
+    await act(async () => {
+      await assert.rejects(currentForm.validateFields());
+    });
+
     for (const [language, prefix] of [
       ['en-US', ''],
       ['zh-CN', 'zh/'],
@@ -209,5 +362,117 @@ test('parameter hints follow the router executable while engine roles retain eng
   } finally {
     await act(async () => root.unmount());
     dom.window.close();
+  }
+});
+
+test('absent backend parameters have no load balancing conflicts', async () => {
+  const { conflictingExternalLBParameters, hasConflictingExternalLB } =
+    await import('../../constants/backend-parameters/vllm.ts');
+  for (const parameters of [undefined, null, []]) {
+    assert.deepEqual(conflictingExternalLBParameters(parameters), []);
+    assert.equal(hasConflictingExternalLB(parameters), false);
+  }
+});
+
+test('external modes are mutually exclusive with either CLI argument spelling', async () => {
+  const { hasConflictingExternalLB } =
+    await import('../../constants/backend-parameters/vllm.ts');
+  assert.equal(hasConflictingExternalLB(['--data-parallel-size=4']), false);
+  assert.equal(
+    hasConflictingExternalLB(['--data-parallel-external-lb']),
+    false
+  );
+  assert.equal(
+    hasConflictingExternalLB([
+      '--data-parallel-external-lb',
+      '--data-parallel-multi-port-external-lb'
+    ]),
+    true
+  );
+  assert.equal(
+    hasConflictingExternalLB([
+      '--data-parallel-external-lb=true --data-parallel-multi-port-external-lb'
+    ]),
+    true
+  );
+});
+
+test('external aliases conflict only as independent flags, including mixed spellings', async () => {
+  const { hasConflictingExternalLB } =
+    await import('../../constants/backend-parameters/vllm.ts');
+  for (const parameters of [
+    ['-dpe', '-dpm'],
+    ['-dpe --data-parallel-multi-port-external-lb'],
+    ['--data-parallel-external-lb', '-dpm'],
+    ['-dpe=true', '-dpm=true']
+  ])
+    assert.equal(
+      hasConflictingExternalLB(parameters),
+      true,
+      JSON.stringify(parameters)
+    );
+  for (const parameters of [
+    [
+      '--data-parallel-external-lb',
+      '--chat-template="example --data-parallel-multi-port-external-lb"'
+    ],
+    [
+      '--data-parallel-external-lb',
+      '--chat-template "example --data-parallel-multi-port-external-lb"'
+    ],
+    ['-dpe', '--metadata={"description":"example -dpm"}'],
+    ['-dpe', 'opaque value -dpm'],
+    ['-dpn=0', '-dpr=0', '--data-parallel-size=4']
+  ])
+    assert.equal(
+      hasConflictingExternalLB(parameters),
+      false,
+      JSON.stringify(parameters)
+    );
+});
+
+test('LB conflict validation follows effective native flags and preserves opaque values', async () => {
+  const { hasConflictingExternalLB } =
+    await import('../../constants/backend-parameters/vllm.ts');
+  for (const [parameters, expected] of [
+    [['-dpe', '--no-data-parallel-external-lb', '-dpm'], false],
+    [['--no-data-parallel-external-lb', '-dpe', '-dpm'], true],
+    [['--data-parallel-external-lb=false', '-dpm'], false],
+    [['--data-parallel-external-lb', 'false', '-dpm'], false],
+    [["--data-parallel-external-lb='FALSE'", '-dpm'], false],
+    [['--data_parallel_external_lb', '--data_parallel_hybrid_lb'], true],
+    [['-dpe', '-dph'], true],
+    [['-dpm', '-dph'], true],
+    [['-dpe', '-dph', '--no-data-parallel-hybrid-lb'], false],
+    [['-dpm', '-dph', '--no-data-parallel-hybrid-lb'], false],
+    [['-dpe -dph --no-data-parallel-external-lb'], false],
+    [['-dpe --data-parallel-start-rank=0'], true],
+    [['-dpm --data-parallel-start-rank=0'], false],
+    [['-dpm --data-parallel-rank=0'], true],
+    [['--constructor', '-dpe'], false],
+    [['-dpe', '--chat-template=example\\ -dph'], false],
+    [['-dpe', '--chat-template example\\ -dph'], false],
+    [['--data-parallel-external-lb=fal"se"', '-dpm'], false],
+    [['--data-parallel-external-lb=fa\\lse', '-dpm'], false],
+    [['--data-parallel-external-lb', '"false"', '-dpm'], true],
+    [['--data-parallel-external-lb=" false "', '-dpm'], true],
+    [['-dpe', '--config={"description": "-dph" , "value": 2}'], false],
+    [['-dpe', '--metadata=["label", "-dph" , "other"]'], false],
+    [['-dpe --chat-template=example{ -dph'], true],
+    [['-dpe', '--max-model-len', '-1\\\n-dph'], true],
+    [['-dpe', '--chat-template=example\u00a0-dph'], false],
+    [['-dpe', '--chat-template=example\u2003-dph'], false],
+    [['-dpe', '--chat-template', '\ufeff-dph'], false],
+    [
+      ['-dpe', '--chat-template="example -dph --no-data-parallel-external-lb"'],
+      false
+    ],
+    [['-dpe', '--chat-template', 'opaque text -dph'], false]
+  ] as [string[], boolean][]) {
+    assert.equal(
+      hasConflictingExternalLB(parameters),
+      expected,
+      JSON.stringify(parameters)
+    );
   }
 });
