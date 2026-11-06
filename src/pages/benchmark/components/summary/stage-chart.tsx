@@ -36,8 +36,6 @@ export const C = {
   // secondary text gets its own value and the right axis its own amber.
   text: '#8b939e',
   axis: '#e5e8ec'
-  // No gridline value here: it is the one colour that has to recede into the
-  // background behind it, so it comes from the theme token at render time.
 };
 
 type Getter = (p: StagePoint) => number | null;
@@ -70,6 +68,7 @@ export interface ChartSpec {
   title: string;
   note: string;
   yName: string;
+  yNameOffsetX?: number;
   /** Shared by axis ticks and the tooltip — one formatter, one rendering. */
   fmt: (v: number) => string;
   log?: boolean;
@@ -122,7 +121,7 @@ const useStyles = createStyles(({ css }) => ({
   card: css`
     background: var(--ant-color-bg-container);
     border: 1px solid var(--ant-color-border-secondary);
-    border-radius: var(--ant-border-radius);
+    border-radius: var(--ant-border-radius-lg);
     padding: 12px 14px 6px;
     display: flex;
     flex-direction: column;
@@ -130,10 +129,11 @@ const useStyles = createStyles(({ css }) => ({
     .head {
       display: flex;
       align-items: baseline;
+      flex-wrap: wrap;
       gap: 10px;
     }
     .head .meta {
-      flex: 1;
+      flex: 1 1 120px;
       min-width: 0;
     }
     .head .t {
@@ -161,6 +161,7 @@ const useStyles = createStyles(({ css }) => ({
       flex: none;
       flex-wrap: wrap;
       justify-content: flex-end;
+      max-width: 100%;
     }
     .legend .li {
       display: inline-flex;
@@ -220,12 +221,8 @@ interface Props {
 
 export const buildStageChartOption = (
   { spec, points, loadAxisName, loadAxisTitle, markerLabels }: Props,
-  // Gridlines are the one part of the palette that cannot be a hex literal like
-  // the rest of `C`: they have to recede into whichever background is behind
-  // them, and a light-theme value reads as a set of bright solid rules in dark
-  // mode. Taken from the antd token so it tracks the theme, and dashed to match
-  // core-ui's charts.
-  splitLineColor: string
+  splitLineColor: string,
+  axisLineColor = C.axis
 ): EChartsCoreOption => {
   const isValueX = !!spec.x;
   const num = (v: number | null) => (v == null ? null : v);
@@ -401,10 +398,6 @@ export const buildStageChartOption = (
 
   const yAxis: Record<string, unknown> = {
     type: spec.log ? 'log' : 'value',
-    name: spec.yName,
-    nameLocation: 'middle',
-    nameGap: 46,
-    nameTextStyle: { color: C.text, fontSize: 12 },
     axisLine: { show: false },
     axisTick: { show: false },
     axisLabel: { color: C.text, formatter: (v: number) => spec.fmt(v) },
@@ -435,9 +428,16 @@ export const buildStageChartOption = (
   const yAxis2 = spec.y2 && {
     type: 'value',
     name: spec.y2.name,
-    nameLocation: 'middle',
-    nameGap: 42,
-    nameTextStyle: { color: C.red, fontSize: 12 },
+    nameLocation: 'end',
+    nameRotate: 0,
+    nameGap: 28,
+    nameTextStyle: {
+      align: 'right',
+      verticalAlign: 'bottom',
+      padding: [0, -8, 0, 0],
+      color: C.red,
+      fontSize: 12
+    },
     min: 0,
     axisLine: { show: false },
     axisTick: { show: false },
@@ -461,12 +461,9 @@ export const buildStageChartOption = (
     ? {
         type: spec.x!.log ? 'log' : 'value',
         name: spec.x!.title ?? spec.x!.name,
-        nameLocation: 'middle',
-        nameGap: 28,
-        nameTextStyle: { color: C.text, fontSize: 12 },
         axisTick: { show: false },
         axisLabel: { color: C.text, formatter: (v: number) => spec.x!.fmt(v) },
-        axisLine: { lineStyle: { color: C.axis } },
+        axisLine: { lineStyle: { color: axisLineColor } },
         splitLine: { show: false },
         ...(spec.x!.log
           ? logDomain(points.map((p) => spec.x!.value(p))) || {}
@@ -476,22 +473,35 @@ export const buildStageChartOption = (
         type: 'category',
         data: points.map((p) => String(p.load)),
         name: loadAxisTitle,
-        nameLocation: 'middle',
-        nameGap: 26,
-        nameTextStyle: { color: C.text, fontSize: 12 },
         axisTick: { show: false },
         axisLabel: { color: C.text },
-        axisLine: { lineStyle: { color: C.axis } },
+        axisLine: { lineStyle: { color: axisLineColor } },
         boundaryGap: false
       };
 
   return {
     animation: false,
-    // Top headroom is for the Best / Peak label: those points sit near the top of
-    // their own chart by definition, and a 'top'-positioned label on the highest
-    // point gets clipped by the plot edge without it.
-    grid: { left: 62, right: spec.y2 ? 56 : 14, top: 26, bottom: 44 },
-    xAxis,
+    grid: {
+      left: 4,
+      right: spec.y2 ? 4 : 14,
+      top: 44,
+      bottom: 32,
+      containLabel: true
+    },
+    // Anchor the name to the canvas edge so wide ticks cannot shift it.
+    graphic: {
+      type: 'text',
+      left: 4 + (spec.yNameOffsetX ?? 0),
+      top: 4,
+      silent: true,
+      style: { text: spec.yName, fill: C.text, fontSize: 12 }
+    },
+    xAxis: {
+      ...xAxis,
+      nameLocation: 'middle',
+      nameGap: 34,
+      nameTextStyle: { color: C.text, fontSize: 12 }
+    },
     yAxis: yAxis2 ? [yAxis, yAxis2] : yAxis,
     tooltip: {
       trigger: 'axis',
@@ -576,20 +586,22 @@ export const buildStageChartOption = (
  */
 const StageChart: React.FC<Props> = (props) => {
   const { styles } = useStyles();
-  const { spec, points, logHint, height = 200 } = props;
+  const { spec, points, logHint, height = 228 } = props;
   const ref = useRef<HTMLDivElement>(null);
   const inst = useRef<ECharts | null>(null);
   const { token } = theme.useToken();
+  const axisLineColor =
+    'darkMode' in token && token.darkMode ? token.colorBorder : C.axis;
 
   useEffect(() => {
     if (!ref.current) return;
     if (!inst.current) inst.current = echarts.init(ref.current);
     inst.current.setOption(
-      buildStageChartOption(props, token.colorBorder),
+      buildStageChartOption(props, token.colorBorder, axisLineColor),
       true
     );
     inst.current.resize();
-  }, [props, token.colorBorder]);
+  }, [props, token.colorBorder, axisLineColor]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -647,7 +659,7 @@ const StageChart: React.FC<Props> = (props) => {
           ))}
         </div>
       </div>
-      <div ref={ref} style={{ width: '100%', height }} />
+      <div ref={ref} style={{ width: '100%', height, marginTop: 'auto' }} />
     </div>
   );
 };
