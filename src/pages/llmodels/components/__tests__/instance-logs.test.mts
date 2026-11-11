@@ -276,15 +276,16 @@ test('container selection preserves Worker identity without Preparation or rank 
       }
     ]
   });
-  await mount(modal());
+  await mount(modal({ status: 'downloading' }));
   assert.equal(container.querySelectorAll('select option').length, 3);
   await select('9:ray-worker');
+  assert.equal(viewer.isDownloading, true);
   assert.deepEqual(viewer.params, {
     follow: true,
     watch: true,
     previous: false,
     worker_id: 9,
-    container_name: 'ray-worker'
+    container_name: 'default'
   });
   assert.doesNotMatch(
     container.textContent!,
@@ -341,11 +342,13 @@ test('SMG has a distinct source option when Engine uses the same default contain
       })
     ]
   });
-  await mount(modal());
+  await mount(modal({ status: 'downloading' }));
   assert.equal(container.querySelectorAll('select option').length, 3);
   assert.equal(viewer.params.container_name, 'default');
   assert.equal(viewer.params.source, undefined);
+  assert.equal(viewer.isDownloading, true);
   await select('7:source:sglang_smg');
+  assert.equal(viewer.isDownloading, false);
   assert.deepEqual(viewer.params, {
     follow: true,
     watch: true,
@@ -365,6 +368,9 @@ test('SMG has a distinct source option when Engine uses the same default contain
     container.querySelector('input[type="checkbox"]')!.click();
   });
   assert.equal(viewer.params.source, 'smg-current');
+  assert.equal(viewer.isDownloading, false);
+  await select('7:default');
+  assert.equal(viewer.isDownloading, true);
 });
 
 test('unavailable SMG sources do not create selectable log options', async () => {
@@ -607,3 +613,65 @@ test('read and options API wrappers forward action cancellation and local errors
     assert.equal(options.skipErrorHandler, true);
   }
 });
+
+test('opening a mounted modal initializes download mode from the selected instance', async () => {
+  optionsResponse = response();
+  await mount(modal({ open: false, status: '' }));
+  await act(async () => {
+    root!.render(modal({ status: 'downloading' }));
+  });
+  assert.equal(viewer.isDownloading, true);
+  assert.equal(viewer.enableScorllLoad, false);
+
+  await act(async () => {
+    root!.render(modal({ open: false, status: '' }));
+  });
+  await act(async () => {
+    root!.render(modal({ status: 'running' }));
+  });
+  assert.equal(viewer.isDownloading, false);
+  assert.equal(viewer.enableScorllLoad, true);
+});
+
+for (const mainContainer of ['default', 'MindIE', 'vLLM']) {
+  for (const withSources of [true, false]) {
+    test(`download mode scopes combined logs for ${mainContainer}, sources=${withSources}`, async () => {
+      optionsResponse = response(
+        withSources
+          ? [source({ id: 'sidecar', container_name: 'sidecar' }), source()]
+          : []
+      );
+      optionsResponse.workers[0].restarts[0].containers = [
+        mainContainer,
+        'sidecar'
+      ];
+      optionsResponse.workers[0].restarts.push({
+        previous: true,
+        started_at: null,
+        containers: [mainContainer],
+        sources: []
+      });
+      await mount(modal({ status: 'downloading' }));
+      assert.equal(viewer.isDownloading, true);
+      assert.equal(viewer.params.container_name, 'default');
+      assert.equal(
+        container.querySelector('select')!.selectedOptions[0].textContent,
+        `${mainContainer}:worker:seven`
+      );
+      await act(async () => {
+        container.querySelector('input[type="checkbox"]')!.click();
+      });
+      assert.equal(viewer.isDownloading, false);
+      await act(async () => {
+        container.querySelector('input[type="checkbox"]')!.click();
+      });
+      assert.equal(viewer.isDownloading, true);
+      await select('7:sidecar');
+      assert.equal(viewer.isDownloading, false);
+      assert.equal(viewer.params.container_name, 'sidecar');
+      await select(`7:${mainContainer}`);
+      assert.equal(viewer.isDownloading, true);
+      assert.equal(viewer.params.container_name, 'default');
+    });
+  }
+}
