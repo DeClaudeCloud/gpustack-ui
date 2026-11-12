@@ -1,4 +1,8 @@
 export default {
+  'playground.image.compare.invalidParameters':
+    'Проверьте параметры: {fields}.',
+  'playground.image.compare.applyFailed':
+    'Не удалось применить параметры к моделям: {models}.',
   'playground.system.tips': 'Введите системные инструкции здесь',
   'playground.title': 'Песочница',
   'playground.system': 'Система',
@@ -208,5 +212,15 @@ export default {
   'playground.decision.answers.empty': 'Ответ не содержит решений.',
   'playground.decision.answer.choice': 'Выбор',
   'playground.decision.answer.score': 'Оценка',
-  'playground.decision.answer.confidence': 'Уверенность'
+  'playground.decision.answer.confidence': 'Уверенность',
+  'playground.decision.images.upload': 'Изображение',
+  'playground.decision.images.copyPlaceholder': 'Копировать плейсхолдер',
+  'playground.decision.images.notReferenced': 'Не используется',
+  'playground.decision.assets': 'Ассеты',
+  'playground.decision.assets.tooltip':
+    'Изображения, отправляемые в виде карты assets. Ссылайтесь на них по плейсхолдеру (например, img-1) в любой строке state или questions (инструкции, критерии).',
+  'playground.decision.assets.empty':
+    'Нет ассетов. Загрузите изображение, чтобы ссылаться на него как img-N.',
+  'playground.decision.assets.deletedStillReferenced':
+    'Удалено из Assets, но в Questions всё ещё есть ссылки на {placeholders}. При необходимости скорректируйте вопросы.'
 };

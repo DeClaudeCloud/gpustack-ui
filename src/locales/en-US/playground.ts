@@ -1,4 +1,8 @@
 export default {
+  'playground.image.compare.invalidParameters':
+    'Check these parameters: {fields}.',
+  'playground.image.compare.applyFailed':
+    'Could not apply parameters to these models: {models}.',
   'playground.system.tips': 'Type system instructions here',
   'playground.title': 'Playground',
   'playground.system': 'System',
@@ -207,5 +211,15 @@ export default {
   'playground.decision.answers.empty': 'The response contained no answers.',
   'playground.decision.answer.choice': 'Choice',
   'playground.decision.answer.score': 'Score',
-  'playground.decision.answer.confidence': 'Confidence'
+  'playground.decision.answer.confidence': 'Confidence',
+  'playground.decision.images.upload': 'Image',
+  'playground.decision.images.copyPlaceholder': 'Copy placeholder',
+  'playground.decision.images.notReferenced': 'Not referenced',
+  'playground.decision.assets': 'Assets',
+  'playground.decision.assets.tooltip':
+    'Images sent as the assets map. Reference one by its placeholder (e.g. img-1) inside any string of the state or the questions (instructions, criteria).',
+  'playground.decision.assets.empty':
+    'No assets. Upload an image to reference it as img-N.',
+  'playground.decision.assets.deletedStillReferenced':
+    'Removed from Assets, but the questions still reference {placeholders}. Adjust the questions as needed.'
 };

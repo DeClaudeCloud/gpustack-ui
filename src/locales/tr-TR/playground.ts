@@ -1,4 +1,8 @@
 export default {
+  'playground.image.compare.invalidParameters':
+    'Şu parametreleri kontrol edin: {fields}.',
+  'playground.image.compare.applyFailed':
+    'Parametreler şu modellere uygulanamadı: {models}.',
   'playground.system.tips': 'Sistem talimatlarını buraya yazın',
   'playground.title': 'Deneme Alanı',
   'playground.system': 'Sistem',
@@ -208,7 +212,17 @@ export default {
   'playground.decision.answers.empty': 'Yanıt hiçbir karar içermiyordu.',
   'playground.decision.answer.choice': 'Seçim',
   'playground.decision.answer.score': 'Puan',
-  'playground.decision.answer.confidence': 'Güven'
+  'playground.decision.answer.confidence': 'Güven',
+  'playground.decision.images.upload': 'Görsel',
+  'playground.decision.images.copyPlaceholder': 'Yer tutucuyu kopyala',
+  'playground.decision.images.notReferenced': 'Kullanılmıyor',
+  'playground.decision.assets': 'Varlıklar',
+  'playground.decision.assets.tooltip':
+    'Assets haritası olarak gönderilen görseller. State veya questions (talimatlar, kriterler) içindeki herhangi bir dizede yer tutucu (örn. img-1) ile referans verin.',
+  'playground.decision.assets.empty':
+    'Varlık yok. Bir görsel yükleyip img-N olarak referans verebilirsiniz.',
+  'playground.decision.assets.deletedStillReferenced':
+    "Assets'ten kaldırıldı, ancak Questions hâlâ {placeholders} referansını içeriyor. Soruları gerektiği gibi ayarlayın."
 };
 
 // ========== To-Do: Translate Keys (Remove After Translation) ==========
