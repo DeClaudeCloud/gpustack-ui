@@ -346,14 +346,15 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
     null
   );
   const [meta, setMeta] = useState<DecisionMeta | null>(null);
-  // Preselected declaratively from ?model=… (e.g. a deployment row's "Open
-  // in Playground"): the initial state doubles as the form's initialValues,
-  // so there is no imperative setFieldsValue effect and no initialized
-  // tracking to race the form's mount. Like the rerank playground, no
-  // default is picked when the param is absent.
-  const [parameters, setParameters] = useState<any>(() => ({
-    model: searchParams.get('model') || ''
-  }));
+  // Like chat, embedding and rerank, prefer ?model=… and fall back to the
+  // first available model as the list loads. An explicit user selection
+  // (including clearing the field) takes precedence over that default.
+  const [selectedModel, setSelectedModel] = useState<string>();
+  const parameters = {
+    model:
+      selectedModel ??
+      (searchParams.get('model') || modelList?.[0]?.value || '')
+  };
   // Uploaded images: base64 payloads + their referencing placeholders. They
   // ride the request as `assets` (and a top-level `images` array for
   // upstream vLLM — see buildImageRequest), never stored server-side.
@@ -608,6 +609,17 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
     return { assets, topLevelImages };
   };
 
+  // The selected model's decision-API image-parameter contract, published by
+  // GPUStack through /v1/models?with_meta (meta.decision_image_input):
+  // "images" means the engine's systemone schema accepts only the top-level
+  // `images` array — upstream vLLM (>= 0.32) forbids extra fields, so also
+  // sending `assets` is a 400 before the model runs. A missing key is "no
+  // declaration": keep both fields, which the undeclared engines observed
+  // so far (TypeSafe-hosted, vllm-sr d3) tolerate.
+  const imageInputContract = (model: string): string | undefined =>
+    (modelList?.find((item: any) => item.value === model) as any)?.meta
+      ?.decision_image_input;
+
   const viewCodeContent = useMemo(() => {
     const { value: state } = parseStateJson();
     const { body } = parseQuestionsJson();
@@ -620,11 +632,18 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
     // Readability stub: real base64 payloads would bury the sample. The
     // `images` stub keeps each data URL's MIME prefix — a non-data-URL
     // entry fails vLLM's media validation if the sample is copied as-is.
+    // The same engine contract as the live request (imageInputContract):
+    // a declared "images" engine gets no `assets` key at all.
+    const imagesOnly =
+      imageInputContract(parameters.model) === 'images' &&
+      Object.keys(assets).length > 0;
     if (Object.keys(assets).length > 0) {
-      codeParameters.assets = _.mapValues(assets, (asset: any) => ({
-        ...asset,
-        data_base64: '<base64-image-data>'
-      }));
+      if (!imagesOnly) {
+        codeParameters.assets = _.mapValues(assets, (asset: any) => ({
+          ...asset,
+          data_base64: '<base64-image-data>'
+        }));
+      }
       codeParameters.images = topLevelImages.map((dataUrl) =>
         dataUrl.replace(
           /^(data:image\/[a-z0-9.+-]+;base64,).*/,
@@ -636,11 +655,11 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
       api: SYSTEMONE_API,
       parameters: codeParameters,
       headers:
-        Object.keys(assets).length > 0
+        Object.keys(assets).length > 0 && !imagesOnly
           ? [['TypeSafe-Danger-Zone-Images', 'true']]
           : []
     });
-  }, [parameters.model, stateJson, questionsJson, images]);
+  }, [parameters.model, stateJson, questionsJson, images, modelList]);
 
   const handleCloseViewCode = () => {
     setShow(false);
@@ -772,19 +791,25 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
         questions: body,
         model: parameters.model
       };
-      // Images ride both `assets` and a top-level `images` array (one body
-      // shape for TypeSafe-hosted, vllm-sr, and upstream vLLM engines).
+      // Images ride `assets` and/or a top-level `images` array per the
+      // selected engine's published contract (see imageInputContract):
+      // "images" engines get only the array, everyone else gets both.
       const { assets, topLevelImages } = buildImageRequest();
       const withImages = Object.keys(assets).length > 0;
+      const imagesOnly =
+        withImages && imageInputContract(parameters.model) === 'images';
       if (withImages) {
-        requestBody.assets = assets;
         requestBody.images = topLevelImages;
+        if (!imagesOnly) {
+          requestBody.assets = assets;
+        }
       }
       // The opt-in image header, attached whenever assets are present
       // (issue #6622 item 3); the gateway passes it through.
-      const imageHeaders = withImages
-        ? { 'TypeSafe-Danger-Zone-Images': 'true' }
-        : undefined;
+      const imageHeaders =
+        withImages && !imagesOnly
+          ? { 'TypeSafe-Danger-Zone-Images': 'true' }
+          : undefined;
       const res: any = await decisionQuery(requestBody, {
         cancelToken: token.token,
         headers: imageHeaders
@@ -838,7 +863,7 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
       // its guards fail (a late answer/error from the old model must not
       // land), reset the run state, then adopt the new model.
       cancelCurrentRequest();
-      setParameters({ model: changedValues.model });
+      setSelectedModel(changedValues.model);
       // Answers belong to the model that produced them.
       setAnswers(null);
       setMeta(null);
@@ -1352,7 +1377,7 @@ const GroundDecision: React.FC<MessageProps> = forwardRef((props, ref) => {
           ref={formRef}
           modelList={modelList}
           onValuesChange={onValuesChange}
-          initialValues={parameters}
+          model={parameters.model}
         ></DataForm>
       </RightContainer>
       <ViewCommonCode
