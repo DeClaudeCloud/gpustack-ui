@@ -1,7 +1,7 @@
 # Fork-only automation. It lives in its own commit on top of the feature
 # branch and is not part of anything proposed upstream.
 #
-# Every day:
+# Every Monday:
 #   1. keep upstream's own workflows disabled in this fork (its CI would run
 #      on every mirrored push),
 #   2. mirror upstream's main into this fork's main,
@@ -19,7 +19,7 @@ name: Sync upstream
 
 on:
   schedule:
-    - cron: "23 3 * * *"
+    - cron: "23 3 * * 1"
   workflow_dispatch:
 
 permissions:
